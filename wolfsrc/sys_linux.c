@@ -1718,7 +1718,7 @@ void SYS_NetAddrString (const unsigned char *addr, char *str)
 #define IPXNETPORT	213
 #define IPXSOCKET	0x7135
 #define IPXHDR		30
-#define MAXIPXNODES	16
+#define MAXIPXNODES	32
 
 static	int		ipxsock = -1;
 static	int		ipxserving;
@@ -1728,8 +1728,8 @@ static	struct sockaddr_in ipxnodes[MAXIPXNODES];	// the server's: who's register
 static	int		numipxnodes;
 
 // a received packet the server is keeping for the local game
-static	unsigned char ipxlocal[32][700];
-static	int		ipxlocallen[8],ipxlocalhead,ipxlocaltail;
+static	unsigned char ipxlocal[64][700];
+static	int		ipxlocallen[64],ipxlocalhead,ipxlocaltail;
 
 static void IpxHeader (unsigned char *h, int len, const unsigned char *dest, int dsock,
 	const unsigned char *src, int ssock)
@@ -1766,7 +1766,7 @@ static int IsBroadcast (const unsigned char *addr)
 
 static void Keep (const unsigned char *pkt, int len)		// for the local game
 {
-	int n = (ipxlocalhead+1) & 31;
+	int n = (ipxlocalhead+1) & 63;
 
 	if (n == ipxlocaltail || len > (int)sizeof(ipxlocal[0]))
 		return;							// (full: lost, as on a network)
@@ -1960,7 +1960,7 @@ int SYS_IpxGet (void *buf, int max, unsigned char *from)
 				return 0;
 			n = ipxlocallen[ipxlocaltail];
 			memcpy (pkt,ipxlocal[ipxlocaltail],n);
-			ipxlocaltail = (ipxlocaltail+1) & 31;
+			ipxlocaltail = (ipxlocaltail+1) & 63;
 		}
 		else
 		{

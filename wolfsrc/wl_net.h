@@ -4,7 +4,8 @@
 #ifndef __WL_NET_H__
 #define __WL_NET_H__
 
-#define MAXPLAYERS	4
+#define MAXPLAYERS	16			// deathmatch (a power of two)
+#define MAXCOOP		4			// co-op
 #define NETNAMELEN	15
 
 extern	boolean	netgame;			// true for a -nodes co-op or a deathmatch game

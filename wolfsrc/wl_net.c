@@ -146,7 +146,52 @@ static	void	DMLoadout (void);
 static	void	ShowFrags (int p);
 
 static	char	myname[NETNAMELEN+1];	// -name
-static	int		playercolors[MAXPLAYERS] = {10,12,14,15};	// as their uniforms
+#define playercolors	NetPlayerColors ()
+
+// the uniforms: players 1-4 as before, then plain tints (6 bit RGB)
+static	byte	tints[MAXPLAYERS][3] =
+{
+	{0,63,0},{63,0,0},{63,52,0},{63,63,63},
+	{0,63,63},{63,16,63},{63,32,0},{36,8,63},
+	{63,36,44},{36,63,8},{40,24,8},{0,40,40},
+	{24,24,24},{44,0,12},{40,40,0},{24,44,63}
+};
+
+// palette colors for their names and arrows: the nearest to the tint
+static int *NetPlayerColors (void)
+{
+	static int	colors[MAXPLAYERS] = {10,12,14,15};
+	static boolean made;
+	int		p,i,c,m,d,bestd,t[3];
+
+	if (made)
+		return colors;
+	for (p=4;p<MAXPLAYERS;p++)
+	{
+		m = tints[p][0];
+		for (c=1;c<3;c++)
+			if (tints[p][c] > m)
+				m = tints[p][c];
+		for (c=0;c<3;c++)		// light enough to read on the floor
+			t[c] = m < 48 ? tints[p][c]*48/(m ? m : 1) : tints[p][c];
+		if (!m)
+			t[0] = t[1] = t[2] = 48;
+		bestd = 0x7fffffff;
+		for (i=1;i<255;i++)
+		{
+			d = 0;
+			for (c=0;c<3;c++)
+				d += (gamepal[i*3+c]-t[c])*(gamepal[i*3+c]-t[c]);
+			if (d < bestd)
+			{
+				bestd = d;
+				colors[p] = i;
+			}
+		}
+	}
+	made = true;
+	return colors;
+}
 
 char *NetName (int p)
 {
@@ -1370,6 +1415,17 @@ bad:
 	}
 }
 
+// players 5-16: the uniform's shading, in their color
+static void Tint (int p, int l, int *r, int *g, int *b)
+{
+	*r = tints[p][0]*l/40;
+	*g = tints[p][1]*l/40;
+	*b = tints[p][2]*l/40;
+	if (*r > 63) *r = 63;
+	if (*g > 63) *g = 63;
+	if (*b > 63) *b = 63;
+}
+
 static void MakeColors (void)
 {
 	int		p,c,i,r,g,b,nr,ng,nb,best,bestd,d,dr,dg,db;
@@ -1390,7 +1446,8 @@ static void MakeColors (void)
 				case 0: nr = b; ng = (r+g)/2; nb = b; break;		// green
 				case 1: nr = (r+g)/2; ng = b; nb = b; break;		// red
 				case 2: continue;									// gold
-				default: nr = ng = nb = (r+g)/2; break;				// white
+				case 3: nr = ng = nb = (r+g)/2; break;				// white
+				default: Tint (p,(r+g)/2,&nr,&ng,&nb); break;
 				}
 			}
 			else
@@ -1402,7 +1459,8 @@ static void MakeColors (void)
 				case 0: nr = r; ng = b; nb = g; break;			// green
 				case 1: nr = b; ng = g; nb = r; break;			// red
 				case 2: nr = b; ng = b*3/4; nb = r/2; break;	// gold
-				default: nr = ng = nb = (r+g+b*2)/3; break;		// white
+				case 3: nr = ng = nb = (r+g+b*2)/3; break;		// white
+				default: Tint (p,b,&nr,&ng,&nb); break;
 				}
 			}
 			best = c;
@@ -1458,7 +1516,7 @@ memptr NetShape (int shapenum)
 	int		p,frame,page;
 	byte	*copy;
 
-	p = (shapenum >> 10) & 3;
+	p = (shapenum >> 10) & (MAXPLAYERS-1);
 	frame = shapenum & 0x3ff;
 
 	if (!netcolorsmade)
@@ -1579,7 +1637,7 @@ int NetPlayerShape (objtype *ob)
 
 #define IPX_SOCKET	0x7135
 #define PKTMAX		200
-#define NUMRECV		16
+#define NUMRECV		48			// 15 others' tics a frame, and snapshot chunks
 #define NUMSEND		MAXPLAYERS
 #define ECBSIZE		48
 #define HDRSIZE		30
@@ -1874,7 +1932,7 @@ static int IPXGet (void *buf, byte *from)
 
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop};
 
-#define NETVERSION	4
+#define NETVERSION	5
 
 typedef struct
 {
@@ -1884,7 +1942,7 @@ typedef struct
 	byte	gotcount,friendlyfire,numpeers,pad;
 	unsigned long nonce;		// who sent it (its own broadcasts come back)
 	char	name[NETNAMELEN+1];
-	byte	peers[MAXPLAYERS][10];	// the others it has found (-connect)
+	byte	peers[MAXCOOP][10];	// the others it has found (-connect)
 } __attribute__((packed)) hellopacket_t;
 
 // the arbiter's word on who comes in: with every tic packet whose
@@ -2110,7 +2168,7 @@ static void MakeHello (hellopacket_t *h, int found, byte (*addrs)[10])
 	h->gotcount = found;
 	h->nonce = mynonce;
 	strcpy (h->name,myname);
-	for (i=1;addrs && i<found && i<=MAXPLAYERS;i++)
+	for (i=1;addrs && i<found && h->numpeers<MAXCOOP;i++)
 		memcpy (h->peers[h->numpeers++],addrs[i],10);
 }
 
@@ -2308,7 +2366,7 @@ static boolean ChatKeys (void)
 	return true;
 }
 
-static void DrawText (int x, int y, char *text, int color)
+static void DrawTextTo (int x, int y, char *text, int color, int right)
 {
 	char	str[CHATLEN+30];
 	word	w,h;
@@ -2320,7 +2378,7 @@ static void DrawText (int x, int y, char *text, int color)
 	for (;;)					// it doesn't clip: shorten it to fit
 	{
 		VW_MeasurePropString (str,&w,&h);
-		if (x+w+1 < viewwidth || !l)
+		if (x+w+1 < right || !l)
 			break;
 		str[--l] = 0;
 	}
@@ -2332,6 +2390,11 @@ static void DrawText (int x, int y, char *text, int color)
 	px = x;
 	py = y;
 	VW_DrawPropString (str);
+}
+
+static void DrawText (int x, int y, char *text, int color)
+{
+	DrawTextTo (x,y,text,color,viewwidth);
 }
 
 /*
@@ -2347,7 +2410,7 @@ static void DrawText (int x, int y, char *text, int color)
 
 static void DrawScores (void)
 {
-	int		order[MAXPLAYERS],n,i,j,t,y,x0,c;
+	int		order[MAXPLAYERS],n,i,j,t,y,y0,x0,c,step,rows,cols,colw;
 	long	a,b;
 	char	str[24];
 
@@ -2366,35 +2429,97 @@ static void DrawScores (void)
 			}
 		}
 
-	x0 = viewwidth/2 - 84;
-	if (x0 < 4)
-		x0 = 4;
-	y = viewheight/2 - 6*n - 6;
-	if (y < 44)
-		y = 44;
-	DrawText (x0,y,"Name",7);
-	DrawText (x0+92,y,deathmatch ? "Frags" : "Score",7);
-	if (deathmatch)
-		DrawText (x0+132,y,"Deaths",7);
-	y += 11;
+	//
+	// one column, or two when a crowd won't fit under the chat lines
+	//
+	step = 10;
+	cols = 1;
+	if (deathmatch && 44+11+step*n > viewheight-2)
+		cols = 2;
+	rows = (n+cols-1)/cols;
+	if (44+11+step*rows > viewheight-2)
+		step = 9;
+	if (11+step*rows > viewheight-4)
+	{
+		// still too many: the best, and us
+		rows = (viewheight-4-11)/step;
+		if (rows*cols < n)
+		{
+			for (i=rows*cols;i<n;i++)
+				if (order[i] == localplayer)
+					order[rows*cols-1] = localplayer;
+			n = rows*cols;
+		}
+	}
+	y0 = viewheight/2 - (11+step*rows)/2;
+	if (y0 < 44)
+		y0 = 44;
+	if (y0+11+step*rows > viewheight-2)
+		y0 = viewheight-2-11-step*rows;
+	if (y0 < 2)
+		y0 = 2;
+
+	if (cols == 1)
+	{
+		colw = 168;
+		x0 = viewwidth/2 - 84;
+		if (x0 < 4)
+			x0 = 4;
+	}
+	else
+	{
+		colw = (viewwidth-8)/2;
+		if (colw > 120)
+			colw = 120;
+		x0 = viewwidth/2 - colw;
+	}
+
 	for (i=0;i<n;i++)
 	{
+		if (i % rows == 0)
+		{
+			y = y0;
+			if (cols == 1)
+			{
+				DrawText (x0,y,"Name",7);
+				DrawText (x0+92,y,deathmatch ? "Frags" : "Score",7);
+				if (deathmatch)
+					DrawText (x0+132,y,"Deaths",7);
+			}
+			else
+			{
+				DrawTextTo (x0,y,"Name",7,x0+colw-4);
+				DrawTextTo (x0+colw-40,y,"F/D",7,x0+colw-2);
+			}
+			y += 11;
+		}
 		j = order[i];
 		c = j == localplayer ? 15 : playercolors[j];
-		DrawText (x0,y,NetName (j),c);
-		if (deathmatch)
+		if (cols == 2)
 		{
-			sprintf (str,"%ld",np[j].frags);
-			DrawText (x0+92,y,str,c);
-			sprintf (str,"%ld",np[j].deaths);
-			DrawText (x0+132,y,str,c);
+			DrawTextTo (x0,y,NetName (j),c,x0+colw-44);
+			sprintf (str,"%ld/%ld",np[j].frags,np[j].deaths);
+			DrawTextTo (x0+colw-40,y,str,c,x0+colw-2);
 		}
 		else
 		{
-			sprintf (str,"%ld",j == netcontext ? gamestate.score : np[j].score);
-			DrawText (x0+92,y,str,c);
+			DrawText (x0,y,NetName (j),c);
+			if (deathmatch)
+			{
+				sprintf (str,"%ld",np[j].frags);
+				DrawText (x0+92,y,str,c);
+				sprintf (str,"%ld",np[j].deaths);
+				DrawText (x0+132,y,str,c);
+			}
+			else
+			{
+				sprintf (str,"%ld",j == netcontext ? gamestate.score : np[j].score);
+				DrawText (x0+92,y,str,c);
+			}
 		}
-		y += 10;
+		y += step;
+		if (i % rows == rows-1)
+			x0 += colw;
 	}
 }
 
@@ -3442,9 +3567,9 @@ void NetStartup (void)
 	}
 	if (!nodes)
 		return;
-	if (nodes < 1 || nodes > MAXPLAYERS)
+	if (nodes < 1 || nodes > MAXCOOP)
 	{
-		printf ("-nodes must be 1 to %d\n",MAXPLAYERS);
+		printf ("-nodes must be 1 to %d\n",MAXCOOP);
 		exit (1);
 	}
 
@@ -3527,7 +3652,7 @@ void NetStartup (void)
 				settings[i][3] = pk->friendlyfire;
 				if (pk->gotcount == nodes)
 					done[i] = true;
-				for (j=0;j<pk->numpeers && j<MAXPLAYERS;j++)
+				for (j=0;j<pk->numpeers && j<MAXCOOP;j++)
 					AddContact (pk->peers[j]);		// the ones it knows
 			}
 			else
