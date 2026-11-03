@@ -50,7 +50,7 @@ char far endStrings[9][80]=
 };
 
 CP_iteminfo
-	MainItems={MENU_X,MENU_Y,10,STARTITEM,24},
+	MainItems={MENU_X,MENU_Y,quit+1,STARTITEM,24},	// (9 without Read This!: it was always 10)
 	SndItems={SM_X,SM_Y1,12,0,52},
 	LSItems={LSM_X,LSM_Y,10,0,24},
 	CtlItems={CTL_X,CTL_Y,6,-1,56},

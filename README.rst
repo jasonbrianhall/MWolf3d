@@ -171,7 +171,7 @@ the keyboard screen F1 to F4 stand for Ctrl, Alt, left and right Shift.
 IPXSETUP's network screen also has a "Connect to" (``-connect``).
 
 The data files can be in upper or lower case. ``-fullscreen`` (or
-Alt+Enter), ``-widescreen`` (a 16:9 view), ``-smooth`` (no square
+F11 / Alt+Enter), ``-widescreen`` (a 16:9 view), ``-smooth`` (no square
 pixels), ``-nosound``; ``./wolf3d --help`` lists the rest. A click in the
 window takes the mouse for turning; F12 (or Shift+Esc) lets it go, and
 so does switching to another window. CONFIG and the saved games are the DOS version's formats for

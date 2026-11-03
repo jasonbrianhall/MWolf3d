@@ -791,7 +791,8 @@ void SYS_Poll (void)
 			}
 			break;
 		case SDL_KEYDOWN:
-			if (ev.key.keysym.scancode == SDL_SCANCODE_RETURN && (ev.key.keysym.mod & KMOD_ALT))
+			if (ev.key.keysym.scancode == SDL_SCANCODE_F11
+			|| (ev.key.keysym.scancode == SDL_SCANCODE_RETURN && (ev.key.keysym.mod & KMOD_ALT)))
 			{
 				if (!ev.key.repeat)
 					ToggleFullscreen ();
