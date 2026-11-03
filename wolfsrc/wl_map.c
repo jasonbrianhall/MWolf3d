@@ -19,7 +19,7 @@ static	long	cx,cy;			// the map point there (global coordinates)
 #define PLAYERCOLOR		15		// white
 #define BACKCOLOR		0
 
-static int othercolors[MAXPLAYERS] = {10,12,14,13};
+static int othercolors[MAXCOOP] = {10,12,14,13};
 
 void AM_Clear (void)
 {
@@ -254,7 +254,7 @@ void AM_Draw (void)
 	if (netgame && !deathmatch)		// deathmatch: that would be telling
 	{
 		for (i=0;i<numplayers;i++)
-			if (playerobjs[i] != player && NetPlayerAlive (i))
+			if (i < MAXCOOP && playerobjs[i] != player && NetPlayerAlive (i))
 				Arrow (playerobjs[i],othercolors[i]);
 	}
 	Arrow (player,PLAYERCOLOR);

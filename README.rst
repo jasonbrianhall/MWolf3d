@@ -61,7 +61,7 @@ T starts a chat message (Enter sends, Esc drops it); while typing,
 Alt+1 to Alt+0 send the chat macros, which SETUP edits
 (``CHATMACS.CFG``).
 
-Deathmatch, over IPX like co-op (2 to 4 players)::
+Deathmatch, over IPX like co-op (2 to 16 players)::
 
   wolf3d -deathmatch -name Hans [-episode 1] [-level 1] [-skill 2]
 

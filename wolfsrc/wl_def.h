@@ -46,7 +46,7 @@
 =============================================================================
 */
 
-#define MAXACTORS		150				// max number of nazis, etc / map
+#define MAXACTORS		165				// max number of nazis, etc / map: the original 150 plus 15 more players
 #define MAXSTATS		400				// max number of lamps, bonus, etc
 #define MAXDOORS		64				// max number of sliding doors
 #define MAXWALLTILES	64				// max number of wall tiles
