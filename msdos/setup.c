@@ -334,6 +334,7 @@ static int SaveConfig (void)
    NAME.CFG (the game reads it too) */
 #define NAMELEN		15
 static int		net_nodes = 2,net_episode = 1,net_level = 1,net_skill = 2,net_ff = 1,net_dm;
+static int		net_monsters;					// deathmatch: the enemies too
 static char		net_name[MACROLEN+1],oldname[MACROLEN+1];
 static char		net_connect[MACROLEN+1];		// Linux: -connect (host[:port])
 
@@ -354,6 +355,8 @@ static void LoadNet (void)
 	if (!f)
 		return;
 	fscanf (f,"%d %d %d %d %d %d",&net_nodes,&net_episode,&net_level,&net_skill,&net_ff,&net_dm);
+	if (fscanf (f," monsters=%d",&net_monsters) != 1)
+		net_monsters = 0;
 	if (fscanf (f," connect=%60s",net_connect) != 1)
 		net_connect[0] = 0;
 	fclose (f);
@@ -372,6 +375,7 @@ static void SaveNet (void)
 	if (f)
 	{
 		fprintf (f,"%d %d %d %d %d %d\n",net_nodes,net_episode,net_level,net_skill,net_ff,net_dm);
+		fprintf (f,"monsters=%d\n",net_monsters);
 		if (net_connect[0])
 			fprintf (f,"connect=%s\n",net_connect);
 		fclose (f);
@@ -1327,6 +1331,7 @@ static void NetworkScreen (int standalone)
 		{F_NUMBER,"Level",0,1,21,0,0,&net_level},
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
 		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
+		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
 #ifdef __linux__
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
 #endif
@@ -1340,9 +1345,9 @@ static void NetworkScreen (int standalone)
 	for (;;)
 	{
 #ifdef __linux__
-		act = Form ("Network game (UDP)",f,10,&cursor,
+		act = Form ("Network game (UDP)",f,11,&cursor,
 #else
-		act = Form ("Network game (IPX)",f,9,&cursor,
+		act = Form ("Network game (IPX)",f,10,&cursor,
 #endif
 			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
@@ -1360,7 +1365,11 @@ static void NetworkScreen (int standalone)
 		sprintf (lv,"%d",net_level);
 		sprintf (sk,"%d",net_skill);
 		if (net_dm)
+		{
 			args[n++] = "-deathmatch";
+			if (net_monsters)
+				args[n++] = "-monsters";
+		}
 		else
 		{
 			args[n++] = "-nodes"; args[n++] = nodes;

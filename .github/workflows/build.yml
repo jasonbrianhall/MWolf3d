@@ -126,6 +126,8 @@ jobs:
                      Everyone has every weapon and both keys; no enemies;
                      the exit is shut. SCORE is your frags; Tab shows
                      everybody's. -host / -join: only start / only join.
+                     -monsters: keep the map's enemies; they come back
+                     1-2 minutes after they're killed.
 
           Version:   ${VERSION}
           Built from: ${GITHUB_REPOSITORY}@${GITHUB_SHA}

@@ -234,8 +234,8 @@ void PlaceItemType (int itemtype, int tilex, int tiley)
 			break;
 		}
 
-		if (spot->shapenum == -1)				// -1 is a free spot
-			break;
+		if (spot->shapenum == -1 && !NetStatReserved (spot-statobjlist))
+			break;							// -1 is a free spot
 	}
 //
 // place it

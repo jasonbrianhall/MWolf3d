@@ -832,6 +832,9 @@ void KillActor (objtype *ob)
 {
 	int	tilex,tiley;
 
+	if (deathmatch)
+		NetEnemyKilled (ob);		// it'll be back
+
 	tilex = ob->tilex = ob->x >> TILESHIFT;		// drop item on center
 	tiley = ob->tiley = ob->y >> TILESHIFT;
 

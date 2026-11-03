@@ -9,6 +9,7 @@
 
 extern	boolean	netgame;			// true for a -nodes co-op or a deathmatch game
 extern	boolean	deathmatch;			// -deathmatch
+extern	boolean	dmmonsters;			// -monsters: the map's enemies too, coming back
 extern	int		numplayers;			// 1 unless netgame
 extern	int		localplayer;		// the one this machine controls and views
 extern	int		netcontext;			// whose globals are loaded right now
@@ -18,6 +19,10 @@ void	NetStartup (void);			// parses -nodes, finds the other players
 void	NetShutdown (void);
 void	NetLeaving (void);			// tells the others we've gone (at exit)
 char	*NetName (int p);			// player p's name (-name)
+void	NetEnemySpawned (int tile, int x, int y, objtype *ob);	// deathmatch -monsters
+void	NetEnemyKilled (objtype *ob);
+boolean	NetStatReserved (int i);	// statobjlist[i] is an item that comes back
+void	ScanInfoTile (int tile, int x, int y);
 void	NetGameLoop (void);			// runs the whole co-op game, never returns
 void	NetLevelStart (void);		// after SetupGameLevel: spawn the others
 void	NetPlayLoop (void);			// replaces PlayLoop in a netgame
