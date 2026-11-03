@@ -43,6 +43,7 @@ boolean	netgame;
 boolean	deathmatch;				// -deathmatch
 boolean	dmmonsters;				// -monsters: the map's enemies are there too
 int		dmtimelimit = 30;		// -timelimit: minutes on a level (0: no limit)
+int		dmfraglimit = 20;		// -fraglimit: frags that win a level (0: no limit)
 int		numplayers = 1;
 int		localplayer;
 int		netcontext;
@@ -1992,7 +1993,7 @@ static int IPXGet (void *buf, byte *from)
 
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop};
 
-#define NETVERSION	6
+#define NETVERSION	7
 
 typedef struct
 {
@@ -2045,6 +2046,7 @@ typedef struct
 	byte	arbiter[10];		// where to ask to come in (0: the sender)
 	byte	monsters,pad;
 	word	timelimit;			// minutes a level
+	word	fraglimit,pad2;		// frags that win it
 	unsigned long build;		// BuildId: a snapshot only fits the same program
 } __attribute__((packed)) infopacket_t;
 
@@ -2094,7 +2096,8 @@ static	byte	broadcast[10] = {0,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff};
 
 static	byte	levelseq;			// counts play loops, the same everywhere
 static	long	netframe;			// frames finished this level
-static	boolean	dmtimeup;			// the level's time ran out: still, the scores up
+static	boolean	dmtimeup;			// the level's over: still, the scores up
+static	long	dmendframe = -1;	// the frame it ended (time or frags), -1 not yet
 
 // frames until the level's time runs out
 static long DMTimeLeft (void)
@@ -2483,7 +2486,7 @@ static void DrawScores (void)
 	int		order[MAXPLAYERS],n,i,j,t,y,y0,x0,c,step,rows,cols,colw,hh;
 	long	left;
 	long	a,b;
-	char	str[24];
+	char	str[48];
 
 	n = 0;
 	for (i=0;i<numplayers;i++)
@@ -2503,7 +2506,7 @@ static void DrawScores (void)
 	//
 	// one column, or two when a crowd won't fit under the chat lines
 	//
-	hh = deathmatch && dmtimelimit ? 21 : 11;	// (the clock on top)
+	hh = deathmatch && (dmtimelimit || dmfraglimit) ? 21 : 11;	// (the limits on top)
 	step = 10;
 	cols = 1;
 	if (deathmatch && 44+hh+step*n > viewheight-2)
@@ -2554,13 +2557,20 @@ static void DrawScores (void)
 			if (hh > 11)
 			{
 				left = DMTimeLeft ();
-				if (left <= 0)
+				if (dmtimeup)
 					sprintf (str,"Next: floor %d",(gamestate.mapon+1)%DMNUMMAPS+1);
-				else
+				else if (dmtimelimit && dmfraglimit)
+				{
+					left = (left+FRAMESASEC-1)/FRAMESASEC;
+					sprintf (str,"%d frags wins   Time left %ld:%02ld",dmfraglimit,left/60,left%60);
+				}
+				else if (dmtimelimit)
 				{
 					left = (left+FRAMESASEC-1)/FRAMESASEC;
 					sprintf (str,"Time left %ld:%02ld",left/60,left%60);
 				}
+				else
+					sprintf (str,"%d frags wins",dmfraglimit);
 				if (i == 0)
 					DrawText (x0,y,str,15);
 				y += 10;
@@ -2991,6 +3001,8 @@ static long WriteGame (byte *buf, int slot)
 	for (i=0;i<MAXPLAYERS;i++)
 		PutPlayer (&np[i]);
 	SnapPutLong (dmtimelimit);
+	SnapPutLong (dmfraglimit);
+	SnapPutLong (dmendframe);
 
 	return sp - buf;
 }
@@ -3120,6 +3132,9 @@ static boolean ReadGame (byte *buf, long len)
 		np[i].ob = &objlist[i];
 	}
 	dmtimelimit = SnapGetLong ();
+	dmfraglimit = SnapGetLong ();
+	dmendframe = SnapGetLong ();
+	dmtimeup = dmendframe >= 0;
 
 	localplayer = slot;
 	netcontext = slot;
@@ -3210,6 +3225,7 @@ static void ReplyInfo (byte *from, unsigned long nonce)
 	pk.nonce = nonce;
 	pk.monsters = dmmonsters;
 	pk.timelimit = dmtimelimit;
+	pk.fraglimit = dmfraglimit;
 	pk.build = BuildId ();
 	arb = Arbiter ();
 	if (arb != localplayer)
@@ -3234,8 +3250,8 @@ static void ReceiveJoin (joinpacket_t *jp, byte *from)
 	}
 	if (pending.active)
 		return;						// one at a time: it'll ask again
-	if (DMTimeLeft () < DMNOJOIN)
-		return;						// the level's about to end: after that
+	if (DMTimeLeft () < DMNOJOIN || dmendframe >= 0)
+		return;						// the level's ending: after that
 
 	if (jp->build != BuildId ())
 	{
@@ -3568,6 +3584,11 @@ static void NetStartupDM (void)
 		dmtimelimit = 0;
 	if (dmtimelimit > 999)
 		dmtimelimit = 999;
+	dmfraglimit = ParmInt ("-fraglimit",20);
+	if (dmfraglimit < 0)
+		dmfraglimit = 0;
+	if (dmfraglimit > 999)
+		dmfraglimit = 999;
 	if (!host)
 	{
 		printf (join ? "Looking for a deathmatch game (Esc aborts)...\n"
@@ -3602,6 +3623,7 @@ static void NetStartupDM (void)
 				hello_skill = ip->skill;
 				dmmonsters = ip->monsters;
 				dmtimelimit = ip->timelimit;
+				dmfraglimit = ip->fraglimit;
 				for (i=0;i<10 && !ip->arbiter[i];i++)
 					;
 				memcpy (arbaddr,i == 10 ? from : ip->arbiter,10);
@@ -3638,8 +3660,12 @@ static void NetStartupDM (void)
 	printf ("Started a deathmatch game: episode %d, level %d, skill %d%s.\n",
 		hello_episode+1,hello_level+1,hello_skill,
 		dmmonsters ? ", with the enemies (back 1-2 minutes after they die)" : "");
-	if (dmtimelimit)
+	if (dmtimelimit && dmfraglimit)
+		printf ("A level is won with %d frags, or ends after %d minutes.\n",dmfraglimit,dmtimelimit);
+	else if (dmtimelimit)
 		printf ("The next level comes every %d minutes.\n",dmtimelimit);
+	else if (dmfraglimit)
+		printf ("A level is won with %d frags.\n",dmfraglimit);
 	printf ("Others can join it any time (wolf3d -deathmatch).\n");
 }
 
@@ -4323,52 +4349,77 @@ static void DMJoin (int k, long f)
 */
 
 //
-// DMClock: in every frame of a deathmatch with -timelimit: warnings, then
-// at the end everything stops and the scores go up, then the next level
+// DMClock: in every frame of a deathmatch with a time or frag limit:
+// warnings, then when the time runs out or somebody has the frags,
+// everything stops with the scores up, then the next level
 //
+#ifndef DMFRAGS
+#define DMFRAGS(i)	np[i].frags		// (testing: deaths)
+#endif
+
 static void DMClock (long f)
 {
 	long	left = DMLIMIT - f;
 	int		i,best,n;
 	char	str[80];
 
-	dmtimeup = left <= 0;
-	if (left == 5l*DMMINUTE*FRAMESASEC)
-		AddChatLine ("5 minutes left on this level",7);
-	else if (left == (long)DMMINUTE*FRAMESASEC)
-		AddChatLine ("1 minute left on this level",7);
-	else if (left == 10l*FRAMESASEC)
-		AddChatLine ("10 seconds left on this level",7);
-	else if (left == 0)
+	if (dmendframe < 0)
 	{
+		if (dmtimelimit)
+		{
+			if (left == 5l*DMMINUTE*FRAMESASEC)
+				AddChatLine ("5 minutes left on this level",7);
+			else if (left == (long)DMMINUTE*FRAMESASEC)
+				AddChatLine ("1 minute left on this level",7);
+			else if (left == 10l*FRAMESASEC)
+				AddChatLine ("10 seconds left on this level",7);
+		}
+
 		best = -1;
 		n = 0;
 		for (i=0;i<numplayers;i++)
 		{
 			if (np[i].removed)
 				continue;
-			if (best == -1 || np[i].frags > np[best].frags)
+			if (best == -1 || DMFRAGS(i) > DMFRAGS(best))
 			{
 				best = i;
 				n = 1;
 			}
-			else if (np[i].frags == np[best].frags)
+			else if (DMFRAGS(i) == DMFRAGS(best))
 				n++;
 		}
-		if (best == -1)
-			strcpy (str,"Time's up!");
-		else if (n > 1)
-			sprintf (str,"Time's up! A tie at %ld frags",np[best].frags);
-		else
-			sprintf (str,"Time's up! %s wins with %ld frags",NetName (best),np[best].frags);
-		AddChatLine (str,15);
-		SD_PlaySound (LEVELDONESND);
+
+		if (dmfraglimit && best != -1 && DMFRAGS(best) >= dmfraglimit)
+		{
+			dmendframe = f;
+			if (n > 1)
+				sprintf (str,"%s and %d more hit %ld frags: a tie",NetName (best),n-1,np[best].frags);
+			else
+				sprintf (str,"%s wins with %ld frags!",NetName (best),np[best].frags);
+		}
+		else if (dmtimelimit && left <= 0)
+		{
+			dmendframe = f;
+			if (best == -1)
+				strcpy (str,"Time's up!");
+			else if (n > 1)
+				sprintf (str,"Time's up! A tie at %ld frags",np[best].frags);
+			else
+				sprintf (str,"Time's up! %s wins with %ld frags",NetName (best),np[best].frags);
+		}
+		if (dmendframe == f)
+		{
+			AddChatLine (str,best != -1 && n == 1 ? playercolors[best] : 15);
+			SD_PlaySound (LEVELDONESND);
+		}
 	}
-	else if (left == -DMENDFRAMES)
+	else if (f == dmendframe+DMENDFRAMES)
 	{
 		gamestate.mapon = (gamestate.mapon+1) % DMNUMMAPS;
 		playstate = ex_warped;			// everyone, after this same frame
 	}
+	dmtimeup = dmendframe >= 0;
 }
 
 static void RunFrame (long f)
@@ -4386,7 +4437,7 @@ static void RunFrame (long f)
 			DMJoin (e & (MAXPLAYERS-1),f);
 	}
 
-	if (deathmatch && dmtimelimit)
+	if (deathmatch && (dmtimelimit || dmfraglimit))
 		DMClock (f);
 
 	for (i=0;i<numplayers;i++)
@@ -4666,6 +4717,7 @@ void NetPlayLoop (void)
 	levelseq++;
 	netframe = 0;
 	dmtimeup = false;
+	dmendframe = -1;
 	pending.active = false;		// (a join that didn't make it: it asks again)
 	for (i=0;i<numplayers;i++)
 	{
