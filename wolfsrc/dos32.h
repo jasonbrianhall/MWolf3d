@@ -9,7 +9,12 @@
 #ifndef __DOS32_H__
 #define __DOS32_H__
 
+#ifdef __linux__
+#include "sys_linux.h"
+#else
+
 #include <dos.h>
+#include <stdint.h>
 #include <dpmi.h>
 #include <go32.h>
 #include <pc.h>
@@ -62,5 +67,7 @@ void DOS32_Startup (void);		// near pointers on, or Quit
 void DOS32_Mark (char *what);		// -timing: STARTUP.TXT
 void DOS32_WriteMarks (void);
 long DOS32_MemoryFree (void);	// bytes the DPMI host can still give us
+
+#endif	// __linux__
 
 #endif

@@ -198,6 +198,37 @@ static void ShowHelp (void)
 	if (i == _argc)
 		return;
 
+#ifdef __linux__
+	printf (
+"Usage: %s [options]\n"
+"\n"
+"  -data DIR                the game's files are in DIR (its CONFIG and saved\n"
+"                           games go there too); else the current directory\n"
+"  -fullscreen              full screen (Alt+Enter switches)\n"
+"  -widescreen              a wider (16:9) view; -vesa WxH for another shape\n"
+"  -smooth                  smooth scaling instead of square pixels\n"
+"  -nosound                 no sound at all\n"
+"\n"
+"Settings (saved to the CONFIG file when you quit):\n"
+"  -sfx off|pc|adlib        sound effects\n"
+"  -music off|adlib         music\n"
+"  -digi off|sb             digitized sound\n"
+"  -mouse on|off            -sensitivity 0-9\n"
+"  -viewsize 4-20           size of the 3D view (20: no border)\n"
+"  -defaults                ignore the CONFIG file\n"
+"  nowait                   skip the intro screens; nomouse: don't use the mouse\n"
+"\n"
+"Network games (UDP, port 27135; -port N for another):\n"
+"  -nodes 2-4 [-episode N] [-level N] [-skill 0-3] [-nofriendlyfire]\n"
+"                           co-op: waits for that many players\n"
+"  -deathmatch [-episode N] [-level N] [-skill 0-3]\n"
+"                           joins a deathmatch going on, or starts one\n"
+"                           (-host: start one; -join: wait for one)\n"
+"  -name NAME               what the others see (else NAME.CFG)\n"
+"  -connect HOST[:PORT]     a game that's not on the local network\n"
+"  -netlog                  write NETLOG.TXT\n",
+		_argv[0]);
+#else
 	printf (
 "Usage: %s [options]\n"
 "\n"
@@ -222,10 +253,16 @@ static void ShowHelp (void)
 "  nomouse nojoys           don't use the mouse / joysticks\n"
 "  Sound Blaster settings come from BLASTER= (e.g. A220 I5 D1)\n"
 "\n"
-"Co-op over IPX:\n"
+"Network games over IPX:\n"
 "  -nodes 2-4 [-episode N] [-level N] [-skill 0-3] [-nofriendlyfire]\n"
-"            [-netlog]\n",
+"                           co-op: waits for that many players\n"
+"  -deathmatch [-episode N] [-level N] [-skill 0-3]\n"
+"                           joins a deathmatch going on, or starts one\n"
+"                           (-host: start one; -join: wait for one)\n"
+"  -name NAME               what the others see (else NAME.CFG)\n"
+"  -netlog                  write NETLOG.TXT\n",
 		_argv[0]);
+#endif
 	exit (0);
 }
 
@@ -1855,7 +1892,11 @@ void    DemoLoop (void)
 
 char    *nosprtxt[] = {"nospr",nil};
 
+#ifdef __linux__
+int wolf_main (void)		// sys_linux.c's main() calls it
+#else
 int main (void)
+#endif
 {
 	int     i;
 

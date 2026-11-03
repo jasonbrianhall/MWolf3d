@@ -351,6 +351,8 @@ void ScanInfoPlane (void)
 			tile = *start++;
 			if (!tile)
 				continue;
+			if (deathmatch && tile >= 108)
+				continue;			// deathmatch: nobody but the players
 
 			switch (tile)
 			{
@@ -751,7 +753,7 @@ void SetupGameLevel (void)
 
 	if (!loadedgame)
 	{
-	 gamestate.TimeCount=
+	 gamestate.playtime=
 	 gamestate.secrettotal=
 	 gamestate.killtotal=
 	 gamestate.treasuretotal=

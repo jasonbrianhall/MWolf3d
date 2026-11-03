@@ -39,6 +39,9 @@
 #endif
 #pragma	hdrstop
 #pragma	warn	-pia
+#ifdef __linux__
+#undef TimeCount			// this is where it lives
+#endif
 
 #ifdef	nil
 #undef	nil
@@ -602,7 +605,7 @@ SDL_StartSB(void)
 	}
 
 	_go32_dpmi_get_protected_mode_interrupt_vector(sbIntVec,&sbOldIntHand);	// Get old interrupt handler
-	sbNewIntHand.pm_offset = (unsigned long)SDL_SBService;
+	sbNewIntHand.pm_offset = (uintptr_t)SDL_SBService;
 	sbNewIntHand.pm_selector = _go32_my_cs();
 	if (_go32_dpmi_allocate_iret_wrapper(&sbNewIntHand))
 		Quit("SDL_StartSB: Can't hook the SoundBlaster interrupt");
@@ -2605,7 +2608,7 @@ SDL_InstallTimer(void)
 		return;
 
 	_go32_dpmi_get_protected_mode_interrupt_vector(8,&t0OldService);
-	t0NewService.pm_offset = (unsigned long)SDL_t0Service;
+	t0NewService.pm_offset = (uintptr_t)SDL_t0Service;
 	t0NewService.pm_selector = _go32_my_cs();
 	if (_go32_dpmi_allocate_iret_wrapper(&t0NewService))
 		Quit("SDL_InstallTimer: Can't hook the timer interrupt");

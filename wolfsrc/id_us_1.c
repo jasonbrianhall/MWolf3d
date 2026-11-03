@@ -42,8 +42,8 @@
 //	Internal variables
 #define	ConfigVersion	1
 
-static	char		*ParmStrings[] = {"TEDLEVEL","NOWAIT"},
-					*ParmStrings2[] = {"COMP","NOCOMP"};
+static	char		*ParmStrings[] = {"TEDLEVEL","NOWAIT",nil},
+					*ParmStrings2[] = {"COMP","NOCOMP",nil};	// (it had no end)
 static	boolean		US_Started;
 
 		boolean		Button0,Button1,

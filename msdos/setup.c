@@ -3,11 +3,13 @@
  *
  * Blue DOS screens like the setup programs of the time.  It edits the
  * CONFIG file the game reads (CONFIG.WL6, .WL1, .SOD or .SDM, whichever
- * data is in the current directory) and starts co-op games over IPX.
+ * data is in the current directory) and starts co-op and deathmatch
+ * games over IPX.
  *
  *   setup            the menus
  *   ipxsetup         straight to the network game menu
  *   ipxsetup -nodes 3 -level 2 ...   no menu: runs the game with them
+ *   ipxsetup -deathmatch ...         (a deathmatch, joined or started)
  *
  * The CONFIG layout is the original's: the high score table, then
  * 16-bit sound, control and view settings.
@@ -238,32 +240,53 @@ static int SaveConfig (void)
 	return 1;
 }
 
-/* network game settings, kept in WOLFNET.CFG */
-static int		net_nodes = 2,net_episode = 1,net_level = 1,net_skill = 2,net_ff = 1;
+/* network game settings, kept in WOLFNET.CFG; the player's name in
+   NAME.CFG (the game reads it too) */
+#define NAMELEN		15
+static int		net_nodes = 2,net_episode = 1,net_level = 1,net_skill = 2,net_ff = 1,net_dm;
+static char		net_name[MACROLEN+1],oldname[MACROLEN+1];
 
 static void LoadNet (void)
 {
-	FILE *f = fopen ("WOLFNET.CFG","r");
+	FILE *f = fopen ("NAME.CFG","r");
 
+	if (f)
+	{
+		if (fgets (net_name,sizeof(net_name),f))
+			net_name[strcspn (net_name,"\r\n")] = 0;
+		net_name[NAMELEN] = 0;
+		fclose (f);
+	}
+	strcpy (oldname,net_name);
+
+	f = fopen ("WOLFNET.CFG","r");
 	if (!f)
 		return;
-	fscanf (f,"%d %d %d %d %d",&net_nodes,&net_episode,&net_level,&net_skill,&net_ff);
+	fscanf (f,"%d %d %d %d %d %d",&net_nodes,&net_episode,&net_level,&net_skill,&net_ff,&net_dm);
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
 	if (net_level < 1 || net_level > levels) net_level = 1;
 	if (net_skill < 0 || net_skill > 3) net_skill = 2;
 	net_ff = !!net_ff;
+	net_dm = !!net_dm;
 }
 
 static void SaveNet (void)
 {
 	FILE *f = fopen ("WOLFNET.CFG","w");
 
-	if (!f)
-		return;
-	fprintf (f,"%d %d %d %d %d\n",net_nodes,net_episode,net_level,net_skill,net_ff);
-	fclose (f);
+	if (f)
+	{
+		fprintf (f,"%d %d %d %d %d %d\n",net_nodes,net_episode,net_level,net_skill,net_ff,net_dm);
+		fclose (f);
+	}
+	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
+	{
+		fprintf (f,"%s\n",net_name);
+		fclose (f);
+		strcpy (oldname,net_name);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -466,7 +489,7 @@ typedef struct
 	const char	**choices;
 	int			action;			// F_ACTION: returned by Form
 	int			*ivalue;		// instead of value
-	char		*str;			// F_STRING (max MACROLEN)
+	char		*str;			// F_STRING (max: max, or MACROLEN)
 } field_t;
 
 static int GetValue (field_t *f)
@@ -641,7 +664,7 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 						if (len)
 							buf[--len] = 0;
 					}
-					else if (c >= ' ' && c < 127 && len < MACROLEN)
+					else if (c >= ' ' && c < 127 && len < (f->max ? f->max : MACROLEN))
 					{
 						buf[len++] = c;
 						buf[len] = 0;
@@ -835,6 +858,8 @@ static void RunGame (const char *const *args)
 	exit (1);
 }
 
+static const char *gamenames[] = {"Co-op","Deathmatch"};
+
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
@@ -843,21 +868,24 @@ static void NetworkScreen (int standalone)
 	int		n,act;
 	field_t	f[] =
 	{
-		{F_NUMBER,"Players",0,2,4,0,0,&net_nodes},
+		{F_CHOICE,"Game",0,0,1,gamenames,0,&net_dm},
+		{F_STRING,"Your name",0,0,NAMELEN,0,0,0,net_name},
+		{F_NUMBER,"Players (co-op)",0,2,4,0,0,&net_nodes},
 		{F_NUMBER,"Episode",0,1,6,0,0,&net_episode},
 		{F_NUMBER,"Level",0,1,21,0,0,&net_level},
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
-		{F_CHOICE,"Friendly fire",0,0,1,onoff,0,&net_ff},
+		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
 		{F_TEXT,""},
 		{F_ACTION,"Start the network game",0,0,0,0,1},
 	};
 
-	f[1].max = episodes;
-	f[2].max = levels;
+	f[3].max = episodes;
+	f[4].max = levels;
 
 	for (;;)
 	{
-		act = Form ("Network game (IPX)",f,7,&cursor,
+		act = Form ("Network game (IPX)",f,9,&cursor,net_dm ?
+			"Deathmatch: join a game, or start one. Its level counts." :
 			"Everyone runs this; player 1's choices count.");
 		if (act == -1)
 		{
@@ -873,14 +901,19 @@ static void NetworkScreen (int standalone)
 		sprintf (ep,"%d",net_episode);
 		sprintf (lv,"%d",net_level);
 		sprintf (sk,"%d",net_skill);
-		args[n++] = "-nodes"; args[n++] = nodes;
+		if (net_dm)
+			args[n++] = "-deathmatch";
+		else
+		{
+			args[n++] = "-nodes"; args[n++] = nodes;
+		}
 		if (episodes > 1)
 		{
 			args[n++] = "-episode"; args[n++] = ep;
 		}
 		args[n++] = "-level"; args[n++] = lv;
 		args[n++] = "-skill"; args[n++] = sk;
-		if (!net_ff)
+		if (!net_ff && !net_dm)
 			args[n++] = "-nofriendlyfire";
 		args[n] = NULL;
 		RunGame (args);
@@ -921,7 +954,7 @@ static void MainScreen (void)
 		{F_ACTION,"Mouse and joystick",0,0,0,0,3},
 		{F_ACTION,"Display",0,0,0,0,4},
 		{F_ACTION,"Chat macros",0,0,0,0,9},
-		{F_ACTION,"Network game (IPX co-op)",0,0,0,0,5},
+		{F_ACTION,"Network game (IPX co-op, deathmatch)",0,0,0,0,5},
 		{F_TEXT,""},
 		{F_ACTION,"Save settings and run the game",0,0,0,0,6},
 		{F_ACTION,"Save settings and exit",0,0,0,0,7},
@@ -986,6 +1019,7 @@ int main (int argc, char **argv)
 			printf ("  ipxsetup [options]  runs %s -nodes 2 [options] straight away\n",gameexe);
 			printf ("                      (-nodes N, -episode N, -level N, -skill 0-3,\n");
 			printf ("                       -nofriendlyfire, and any other game option)\n");
+			printf ("  ipxsetup -deathmatch [options]  joins (or starts) a deathmatch\n");
 			return 0;
 		}
 
@@ -997,7 +1031,8 @@ int main (int argc, char **argv)
 
 		for (i=1;i<argc && n < 60;i++)
 		{
-			if (!stricmp (argv[i],"-nodes"))
+			if (!stricmp (argv[i],"-nodes") || !stricmp (argv[i],"-deathmatch")
+			|| !stricmp (argv[i],"-dm"))
 				hasnodes = 1;
 			args[n++] = argv[i];
 		}

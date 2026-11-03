@@ -950,6 +950,8 @@ void ClipMove (objtype *ob, long xmove, long ymove)
 
 void VictoryTile (void)
 {
+	if (deathmatch)
+		return;					// the exit is shut
 #ifndef SPEAR
 	SpawnBJVictory ();
 #endif
@@ -1095,7 +1097,12 @@ void Cmd_Use (void)
 		PushWall (checkx,checky,dir);
 		return;
 	}
-	if (!buttonheld[bt_use] && doornum == ELEVATORTILE && elevatorok)
+	if (!buttonheld[bt_use] && doornum == ELEVATORTILE && deathmatch)
+	{
+		buttonheld[bt_use] = true;		// no way out of a deathmatch
+		SD_PlaySound (NOWAYSND);
+	}
+	else if (!buttonheld[bt_use] && doornum == ELEVATORTILE && elevatorok)
 	{
 	//
 	// use elevator

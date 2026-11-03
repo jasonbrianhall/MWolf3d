@@ -51,6 +51,14 @@ US_InitRndT(boolean randomize)
 		rndindex = 0;			// set to a definite value
 }
 
+//	US_SetRndIndex() - where the random numbers are (a deathmatch
+//		newcomer takes the game's)
+void
+US_SetRndIndex(int index)
+{
+	rndindex = index & 0xff;
+}
+
 ///////////////////////////////////////////////////////////////////////////
 //
 //	US_RndT() - Returns the next 8-bit pseudo random number

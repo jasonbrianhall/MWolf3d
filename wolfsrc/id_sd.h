@@ -203,6 +203,10 @@ extern	SMMode		MusicMode;
 extern	volatile boolean	DigiPlaying;
 extern	int			DigiMap[];
 extern	volatile longword	TimeCount;			// Global time in ticks
+#ifdef __linux__
+// read through SYS_TimeCount, which keeps SDL's events coming in busy loops
+#define TimeCount	(*(volatile longword *)SYS_TimeCount())
+#endif
 
 // Function prototypes
 extern	void	SD_Startup(void),

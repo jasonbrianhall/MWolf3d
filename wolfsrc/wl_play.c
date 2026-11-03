@@ -664,7 +664,7 @@ void CheckKeys (void)
 		gamestate.ammo = 99;
 		gamestate.keys = 3;
 		gamestate.score = 0;
-		gamestate.TimeCount += 42000L;
+		gamestate.playtime += 42000L;
 		GiveWeapon (wp_chaingun);
 
 		DrawWeapon();
@@ -1451,7 +1451,7 @@ void PlayLoop (void)
 		}
 		#endif
 
-		gamestate.TimeCount+=tics;
+		gamestate.playtime+=tics;
 
 		SD_Poll ();
 		UpdateSoundLoc();	// JAB

@@ -138,6 +138,15 @@ void InitStaticList (void)
 
 void SpawnStatic (int tilex, int tiley, int type)
 {
+	if (deathmatch)
+		switch (statinfo[type].type)
+		{
+		case bo_cross: case bo_chalice: case bo_bible: case bo_crown:
+		case bo_fullheal: case bo_key1: case bo_key2: case bo_key3:
+		case bo_key4: case bo_spear:
+			return;				// deathmatch: no treasure, lives, keys or spear
+		}
+
 	laststatobj->shapenum = statinfo[type].picnum;
 	laststatobj->tilex = tilex;
 	laststatobj->tiley = tiley;

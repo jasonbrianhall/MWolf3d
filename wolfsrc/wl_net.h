@@ -1,11 +1,14 @@
-// WL_NET.H -- IPX co-op (lockstep), MS-DOS / DJGPP
+// WL_NET.H -- network co-op and deathmatch (lockstep): IPX on MS-DOS,
+// UDP on Linux
 
 #ifndef __WL_NET_H__
 #define __WL_NET_H__
 
 #define MAXPLAYERS	4
+#define NETNAMELEN	15
 
-extern	boolean	netgame;			// true for a -nodes co-op game
+extern	boolean	netgame;			// true for a -nodes co-op or a deathmatch game
+extern	boolean	deathmatch;			// -deathmatch
 extern	int		numplayers;			// 1 unless netgame
 extern	int		localplayer;		// the one this machine controls and views
 extern	int		netcontext;			// whose globals are loaded right now
@@ -13,6 +16,8 @@ extern	objtype	*playerobjs[MAXPLAYERS];
 
 void	NetStartup (void);			// parses -nodes, finds the other players
 void	NetShutdown (void);
+void	NetLeaving (void);			// tells the others we've gone (at exit)
+char	*NetName (int p);			// player p's name (-name)
 void	NetGameLoop (void);			// runs the whole co-op game, never returns
 void	NetLevelStart (void);		// after SetupGameLevel: spawn the others
 void	NetPlayLoop (void);			// replaces PlayLoop in a netgame
