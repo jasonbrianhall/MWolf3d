@@ -75,7 +75,7 @@ enemies, no treasure, keys or extra lives on the map; everybody starts
 at random, and the ammo, food and first aid kits that are picked up come
 back after 30 seconds. The exit is shut. With ``-monsters`` (Enemies in IPXSETUP) the map's
 guards, dogs and bosses stay in, and one that's killed comes back where
-it started 1 to 2 minutes later; being killed by one costs no frag.
+it started 1 to 2 minutes later, with the respawn (teleport) sound; being killed by one costs no frag.
 The game's starter decides. The SCORE on the status bar is
 your frags (one for a kill, one off if you die without anyone to thank);
 Tab's automap also shows everybody's frags and deaths, and so does the
@@ -173,8 +173,8 @@ IPXSETUP's network screen also has a "Connect to" (``-connect``).
 The data files can be in upper or lower case. ``-fullscreen`` (or
 Alt+Enter), ``-widescreen`` (a 16:9 view), ``-smooth`` (no square
 pixels), ``-nosound``; ``./wolf3d --help`` lists the rest. A click in the
-window takes the mouse for turning (it's let go when the window loses
-the focus). CONFIG and the saved games are the DOS version's formats for
+window takes the mouse for turning; F12 (or Shift+Esc) lets it go, and
+so does switching to another window. CONFIG and the saved games are the DOS version's formats for
 the settings, but saved games only load in the build that made them.
 
 Network games go over UDP port 27135 to the local network (``-port N``

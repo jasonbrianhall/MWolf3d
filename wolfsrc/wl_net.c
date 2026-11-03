@@ -705,13 +705,16 @@ static void LoadRespawnSound (void)
 	MakeTeleportSound ();
 }
 
-// from Respawn: everyone hears it, from where the player comes back
+// from Respawn, a newcomer and (-monsters) an enemy coming back: everyone
+// hears it, from where it happens
 static void RespawnSound (objtype *ob)
 {
+	boolean	here = ob == np[localplayer].ob;	// (else from where it is)
+
 	if (!rstried)
 		LoadRespawnSound ();
 
-	if (netcontext != localplayer)
+	if (!here)
 	{
 		SetSoundLoc (ob->x,ob->y);
 		if (soundinaudible || (soundquiet && !SD_SoundHasVolume (LASTSOUND)))
@@ -721,12 +724,12 @@ static void RespawnSound (objtype *ob)
 	if (DigiMode == sds_Off)
 	{
 		// nothing digitized: the next best thing
-		if (netcontext != localplayer)
+		if (!here)
 			PlaySoundLocGlobal (BONUS1UPSND,ob->x,ob->y);
 		else
 			SD_PlaySound (BONUS1UPSND);
 	}
-	else if (SD_PlaySample (rsdata,rslen,RSPRIORITY) && netcontext != localplayer)
+	else if (SD_PlaySample (rsdata,rslen,RSPRIORITY) && !here)
 	{
 		globalsoundx = ob->x;			// UpdateSoundLoc keeps it placed
 		globalsoundy = ob->y;
@@ -1032,7 +1035,10 @@ static void DMItems (void)
 		before = lastobj;
 		ScanInfoTile (e->tile,e->x,e->y);
 		if (lastobj != before)
+		{
 			e->ob = lastobj-objlist;
+			RespawnSound (lastobj);		// the teleport sound, from there
+		}
 		if (netlog)
 			fprintf (netlog,"enemy %d back (objects: %d)\n",i,objcount);
 	}
