@@ -185,8 +185,24 @@ co-op with ``-connect``, the others it finds are passed along::
   ./wolf3d -deathmatch -connect 192.168.1.20 -name Fritz
   ./wolf3d -nodes 2 -connect example.org:27135        # co-op
 
-Linux and DOS players can't play together (UDP isn't IPX, and the two
-builds must do exactly the same arithmetic). No joysticks yet.
+Playing with DOS players: the DOS game in DOSBox talks IPX through
+DOSBox's IPXNET (IPX packets in UDP, through a server everyone connects
+to), and the Linux game can join in. Either DOSBox is the server::
+
+  DOSBox:  IPXNET STARTSERVER 21300            (then WOLF3D -deathmatch ...)
+  Linux:   ./wolf3d -deathmatch -ipxnet dosboxhost:21300
+
+or the Linux game is (port 213, DOSBox's default, if it may; else
+21300, and it says so)::
+
+  Linux:   ./wolf3d -deathmatch -ipxserver [port]
+  DOSBox:  IPXNET CONNECT linuxhost [port]       (then WOLF3D -deathmatch ...)
+
+Co-op (``-nodes``) and deathmatch both work across, either way round, a
+deathmatch newcomer included. Everyone needs the same game data version.
+IPXSETUP's "Network" line picks UDP, joining an IPXNET server or being
+one. (Ports below 1024 need root on Linux, so pick something like 21300
+for DOSBox's server there too.) No joysticks yet.
 
 The original source release was made using the ``DEICE.EXE``
 installer (DeIce) in the root directory.  (Basically a way to

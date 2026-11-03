@@ -324,6 +324,54 @@ int NetTarget (objtype *ob)
 /*
 ===================
 =
+= NetAngle
+=
+= The direction of dx,dy (dy up) in ANGLES, rounded down, as the bosses'
+= atan2 has it; but from the sine table with integers, so a DOS and a
+= Linux machine (different maths libraries, different FPUs) agree
+=
+===================
+*/
+
+int NetAngle (long dx, long dy)
+{
+	long	x,y,t;
+	int		q,lo,hi,mid;
+
+	if (!dx && !dy)
+		return 0;
+	if (dx > 0 && dy >= 0)
+		q = 0;
+	else if (dx <= 0 && dy > 0)
+		q = 1;
+	else if (dx < 0 && dy <= 0)
+		q = 2;
+	else
+		q = 3;
+	x = dx;
+	y = dy;
+	while (q-- > 0 && (t = x, x = y, y = -t, 1))
+		;
+	q = dx > 0 && dy >= 0 ? 0 : dx <= 0 && dy > 0 ? 1 : dx < 0 && dy <= 0 ? 2 : 3;
+
+	// the biggest a in 0..89 with the vector at or past a
+	lo = 0;
+	hi = ANGLES/4-1;
+	while (lo < hi)
+	{
+		mid = (lo+hi+1)/2;
+		if ((int64_t)costable[mid]*y - (int64_t)sintable[mid]*x >= 0)
+			lo = mid;
+		else
+			hi = mid-1;
+	}
+	return q*(ANGLES/4) + lo;
+}
+
+
+/*
+===================
+=
 = NetProject
 =
 = Where ob is in viewer's view, worked out the same on every machine
@@ -1749,19 +1797,41 @@ static int IPXGet (void *buf, byte *from)
 
 static	boolean	ipxup;
 static	byte	myaddr[10];
+static	boolean	ipxnet;				// -ipxnet / -ipxserver: DOSBox's IPX, not UDP
 
 static void IPXSend (int slot, byte *addr, void *data, int len)
 {
-	SYS_NetSend (addr,data,len);
+	if (ipxnet)
+		SYS_IpxSend (addr,data,len);
+	else
+		SYS_NetSend (addr,data,len);
 }
 
 static boolean IPXStartup (void)
 {
 	int		i,port = UDPPORT;
+	char	*server = NULL;
+	int		serve = 0;
 
-	for (i=1;i<_argc-1;i++)
-		if (!stricmp (_argv[i],"-port"))
+	for (i=1;i<_argc;i++)
+	{
+		if (!stricmp (_argv[i],"-port") && i+1 < _argc)
 			port = atoi (_argv[i+1]);
+		if (!stricmp (_argv[i],"-ipxnet") && i+1 < _argc)
+			server = _argv[i+1];
+		if (!stricmp (_argv[i],"-ipxserver"))
+			serve = i+1 < _argc && isdigit (_argv[i+1][0]) ? atoi (_argv[i+1]) : 213;
+	}
+	if (server || serve)
+	{
+		// with DOS players (in DOSBox): IPX, as theirs
+		if (!SYS_IpxStartup (server,serve))
+			return false;
+		SYS_IpxMyAddr (myaddr);
+		ipxnet = true;
+		ipxup = true;
+		return true;
+	}
 	if (!SYS_NetStartup (port))
 		return false;
 	SYS_NetMyAddr (myaddr);
@@ -1780,6 +1850,8 @@ void NetShutdown (void)
 
 static int IPXGet (void *buf, byte *from)
 {
+	if (ipxnet)
+		return SYS_IpxGet (buf,PKTMAX,from);
 	return SYS_NetGet (buf,PKTMAX,from);
 }
 
@@ -2437,20 +2509,55 @@ static objtype *IndexObj (long i)
 }
 
 //
-// BuildId: the snapshot has the actors' state pointers as they are, which
-// only means the same thing to the same program; this tells two apart
+// The states, by number (wl_states.h, made by msdos/mkstates.py): a
+// snapshot names an actor's state by its place in the list, so a DOS and
+// a Linux machine agree
+//
+#define STATE(n)	extern statetype n;
+#include "wl_states.h"
+#undef STATE
+
+static statetype *statelist[] =
+{
+#define STATE(n)	&n,
+#include "wl_states.h"
+#undef STATE
+	NULL
+};
+#define NUMSTATES	(sizeof(statelist)/sizeof(statelist[0])-1)
+
+static long StateIndex (statetype *st)
+{
+	long i;
+
+	if (!st)
+		return -1;
+	for (i=0;i<NUMSTATES;i++)
+		if (statelist[i] == st)
+			return i;
+	return -2;						// (not in wl_states.h: run mkstates.py)
+}
+
+static statetype *IndexState (long i)
+{
+	return i >= 0 && i < NUMSTATES ? statelist[i] : NULL;
+}
+
+//
+// BuildId: whether a snapshot from the other machine fits: the same game
+// data version, the same states and limits (not the same program: DOS
+// and Linux builds join each other)
 //
 static unsigned long BuildId (void)
 {
-	extern	statetype s_attack;
 	unsigned long h;
+	int		i;
 
-	h = sizeof(objtype)*31 + sizeof(netplayer_t)*7 + sizeof(statobj_t)*131 + MAXACTORS + NETVERSION;
-	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_player;
-	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_attack;
-	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_netdead;
-	h = h*2654435761u ^ (unsigned long)(uintptr_t)objlist;
-	h = h*2654435761u ^ (unsigned long)(uintptr_t)statobjlist;
+	h = NUMSTATES*31 + MAXACTORS*7 + MAXSTATS*131 + MAXDOORS + NETVERSION;
+	h = h*2654435761u + sizeof(gametype);
+	h = h*2654435761u + sizeof(doorobj_t);
+	for (i=0;extension[i];i++)
+		h = h*31 + toupper (extension[i]);
 	return h;
 }
 
@@ -2508,6 +2615,54 @@ static long Unpack (byte *in, long len, byte *out, long max)
 		o += n;
 	}
 	return o;
+}
+
+//
+// PutPlayer / GetPlayer: what a player is, but its controls
+//
+#define PLAYERFIELDS \
+	F(oldscore) F(score) F(nextextra) F(lives) F(health) F(ammo) F(keys) \
+	F(bestweapon) F(weapon) F(chosenweapon) F(faceframe) F(attackframe) \
+	F(attackcount) F(weaponframe) F(thrustspeed) F(plux) F(pluy) F(anglefrac) \
+	F(gotgatgun) F(facecount) F(playerxmove) F(playerymove) F(controlx) \
+	F(controly) F(dead) F(removed) F(respawn) F(spawnx) F(spawny) \
+	F(spawnangle) F(anim) F(moving) F(pain) F(gone) F(lastframe) F(firstcmd) \
+	F(frags) F(deaths)
+
+static void PutPlayer (netplayer_t *p)
+{
+	int i;
+
+#define F(f)	SnapPutLong (p->f);
+	PLAYERFIELDS
+#undef F
+	for (i=0;i<NUMBUTTONS;i++)
+	{
+		SnapPutLong (p->buttonstate[i]);
+		SnapPutLong (p->buttonheld[i]);
+	}
+	SnapPutLong (ObjIndex (p->lastattacker));
+	Put (p->name,sizeof(p->name));
+	Put (p->addr,sizeof(p->addr));
+}
+
+static void GetPlayer (netplayer_t *p)
+{
+	int i;
+
+	memset (p,0,sizeof(*p));
+#define F(f)	p->f = SnapGetLong ();
+	PLAYERFIELDS
+#undef F
+	for (i=0;i<NUMBUTTONS;i++)
+	{
+		p->buttonstate[i] = SnapGetLong ();
+		p->buttonheld[i] = SnapGetLong ();
+	}
+	p->lastattacker = IndexObj (SnapGetLong ());
+	Get (p->name,sizeof(p->name));
+	p->name[NETNAMELEN] = 0;
+	Get (p->addr,sizeof(p->addr));
 }
 
 //
@@ -2583,26 +2738,41 @@ static long WriteGame (byte *buf, int slot)
 	SnapPutLong (ObjIndex (objfreelist));
 	for (i=0;i<MAXACTORS;i++)
 	{
-		ob = objlist[i];
-		SnapPutLong (ObjIndex (ob.next));
-		SnapPutLong (ObjIndex (ob.prev));
-		ob.next = ob.prev = NULL;
-		Put (&ob,sizeof(ob));
+		objtype *o = &objlist[i];
+
+		v = StateIndex (o->state);
+		if (v == -2)
+			Quit ("Deathmatch snapshot: a state wl_states.h doesn't have");
+		SnapPutLong (v);
+		SnapPutLong (ObjIndex (o->next));
+		SnapPutLong (ObjIndex (o->prev));
+		SnapPutLong (o->active);
+		SnapPutLong (o->ticcount);
+		SnapPutLong (o->obclass);
+		SnapPutLong (o->flags);
+		SnapPutLong (o->distance);
+		SnapPutLong (o->dir);
+		SnapPutLong (o->x);
+		SnapPutLong (o->y);
+		SnapPutLong (o->tilex);
+		SnapPutLong (o->tiley);
+		SnapPutLong (o->areanumber);
+		SnapPutLong (o->viewx);
+		SnapPutLong (o->viewheight);
+		SnapPutLong (o->transx);
+		SnapPutLong (o->transy);
+		SnapPutLong (o->angle);
+		SnapPutLong (o->hitpoints);
+		SnapPutLong (o->speed);
+		SnapPutLong (o->temp1);
+		SnapPutLong (o->temp2);
+		SnapPutLong (o->temp3);
 	}
 	SnapPutLong (numdmenemies);
 	Put (dmenemies,numdmenemies*sizeof(dmenemies[0]));
 
 	for (i=0;i<MAXPLAYERS;i++)
-	{
-		p = np[i];
-		v = ObjIndex (p.lastattacker);
-		p.ob = NULL;
-		p.lastattacker = NULL;
-		memset (p.cmdframe,0,sizeof(p.cmdframe));	// (the newcomer starts afresh)
-		memset (p.cmds,0,sizeof(p.cmds));
-		SnapPutLong (v);
-		Put (&p,sizeof(p));
-	}
+		PutPlayer (&np[i]);
 
 	return sp - buf;
 }
@@ -2681,11 +2851,35 @@ static boolean ReadGame (byte *buf, long len)
 	objfreelist = IndexObj (SnapGetLong ());
 	for (i=0;i<MAXACTORS;i++)
 	{
-		long nx = SnapGetLong (), pv = SnapGetLong ();
-		Get (&ob,sizeof(ob));
-		ob.next = IndexObj (nx);
-		ob.prev = IndexObj (pv);
-		objlist[i] = ob;
+		objtype *o = &objlist[i];
+
+		v = SnapGetLong ();
+		o->state = IndexState (v);
+		if (v >= 0 && !o->state)
+			return false;
+		o->next = IndexObj (SnapGetLong ());
+		o->prev = IndexObj (SnapGetLong ());
+		o->active = SnapGetLong ();
+		o->ticcount = SnapGetLong ();
+		o->obclass = SnapGetLong ();
+		o->flags = SnapGetLong ();
+		o->distance = SnapGetLong ();
+		o->dir = SnapGetLong ();
+		o->x = SnapGetLong ();
+		o->y = SnapGetLong ();
+		o->tilex = SnapGetLong ();
+		o->tiley = SnapGetLong ();
+		o->areanumber = SnapGetLong ();
+		o->viewx = SnapGetLong ();
+		o->viewheight = SnapGetLong ();
+		o->transx = SnapGetLong ();
+		o->transy = SnapGetLong ();
+		o->angle = SnapGetLong ();
+		o->hitpoints = SnapGetLong ();
+		o->speed = SnapGetLong ();
+		o->temp1 = SnapGetLong ();
+		o->temp2 = SnapGetLong ();
+		o->temp3 = SnapGetLong ();
 	}
 	numdmenemies = SnapGetLong ();
 	if (numdmenemies < 0 || numdmenemies > MAXACTORS)
@@ -2694,12 +2888,8 @@ static boolean ReadGame (byte *buf, long len)
 
 	for (i=0;i<MAXPLAYERS;i++)
 	{
-		o = &objlist[i];
-		v = SnapGetLong ();
-		Get (&p,sizeof(p));
-		p.ob = o;
-		p.lastattacker = IndexObj (v);
-		np[i] = p;					// (addresses as the arbiter has them)
+		GetPlayer (&np[i]);			// (addresses as the arbiter has them)
+		np[i].ob = &objlist[i];
 	}
 
 	localplayer = slot;
@@ -3068,7 +3258,7 @@ static void NetTransport (void)
 	if (!IPXStartup ())
 	{
 #ifdef __linux__
-		printf ("Can't open the UDP port (-port N for another).\n");
+		printf ("Can't start the network (UDP port in use? -port N for another).\n");
 #else
 		printf ("No IPX driver found (load one, or use DOSBox's ipx=true and IPXNET).\n");
 #endif
@@ -3077,25 +3267,28 @@ static void NetTransport (void)
 	atexit (NetShutdown);
 
 #ifdef __linux__
-	// the local network on the usual port (and on ours, if it's another)
-	SYS_NetBroadcastAddr (broadcast,UDPPORT);
-	SYS_NetBroadcastAddr (a,0);
-	if (memcmp (a,broadcast,10))
-		AddContact (a);
+	if (!ipxnet)
+	{
+		// the local network on the usual port (and on ours, if it's another)
+		SYS_NetBroadcastAddr (broadcast,UDPPORT);
+		SYS_NetBroadcastAddr (a,0);
+		if (memcmp (a,broadcast,10))
+			AddContact (a);
+		for (i=1;i<_argc-1;i++)
+			if (!stricmp (_argv[i],"-connect"))
+			{
+				if (SYS_NetResolve (_argv[i+1],a,UDPPORT))
+					AddContact (a);
+				else
+					printf ("Can't find %s\n",_argv[i+1]);
+			}
+	}
 	{
 		struct timespec ts;
 		clock_gettime (CLOCK_MONOTONIC,&ts);
 		mynonce = (unsigned long)time (NULL) * 2654435761u ^ (unsigned long)getpid () * 40503u
 			^ (unsigned long)ts.tv_nsec;
 	}
-	for (i=1;i<_argc-1;i++)
-		if (!stricmp (_argv[i],"-connect"))
-		{
-			if (SYS_NetResolve (_argv[i+1],a,UDPPORT))
-				AddContact (a);
-			else
-				printf ("Can't find %s\n",_argv[i+1]);
-		}
 #else
 	mynonce = BiosTicks () * 2654435761ul;
 	for (i=0;i<10;i++)

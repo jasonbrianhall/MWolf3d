@@ -1640,6 +1640,8 @@ void T_Launch (objtype *ob)
 	if (angle<0)
 		angle = M_PI*2+angle;
 	iangle = angle/(M_PI*2)*ANGLES;
+	if (netgame)
+		iangle = NetAngle (deltax,deltay);	// the same on every machine (no libm)
 	if (ob->obclass == deathobj)
 	{
 		T_Shoot (ob);
@@ -2323,6 +2325,8 @@ void T_SchabbThrow (objtype *ob)
 	if (angle<0)
 		angle = M_PI*2+angle;
 	iangle = angle/(M_PI*2)*ANGLES;
+	if (netgame)
+		iangle = NetAngle (deltax,deltay);	// the same on every machine (no libm)
 
 	GetNewActor ();
 	new->state = &s_needle1;
@@ -2363,6 +2367,8 @@ void T_GiftThrow (objtype *ob)
 	if (angle<0)
 		angle = M_PI*2+angle;
 	iangle = angle/(M_PI*2)*ANGLES;
+	if (netgame)
+		iangle = NetAngle (deltax,deltay);	// the same on every machine (no libm)
 
 	GetNewActor ();
 	new->state = &s_rocket;
@@ -2960,6 +2966,8 @@ void T_FakeFire (objtype *ob)
 	if (angle<0)
 		angle = M_PI*2+angle;
 	iangle = angle/(M_PI*2)*ANGLES;
+	if (netgame)
+		iangle = NetAngle (deltax,deltay);	// the same on every machine (no libm)
 
 	GetNewActor ();
 	new->state = &s_fire1;

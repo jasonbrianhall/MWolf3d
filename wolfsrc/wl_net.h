@@ -23,6 +23,7 @@ void	NetEnemySpawned (int tile, int x, int y, objtype *ob);	// deathmatch -monst
 void	NetEnemyKilled (objtype *ob);
 boolean	NetStatReserved (int i);	// statobjlist[i] is an item that comes back
 void	ScanInfoTile (int tile, int x, int y);
+int		NetAngle (long dx, long dy);	// atan2's, in ANGLES, from the tables
 void	NetGameLoop (void);			// runs the whole co-op game, never returns
 void	NetLevelStart (void);		// after SetupGameLevel: spawn the others
 void	NetPlayLoop (void);			// replaces PlayLoop in a netgame

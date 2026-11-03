@@ -208,6 +208,14 @@ void	SYS_NetBroadcastAddr (unsigned char *addr, int port);	// 0: ours
 int		SYS_NetResolve (const char *name, unsigned char *addr, int defport);
 void	SYS_NetAddrString (const unsigned char *addr, char *str);
 
+// IPX the way DOSBox does it (IPXNET): IPX packets in UDP, through a
+// server that every node registers with. With this the Linux game plays
+// with the DOS one running in DOSBox. Addresses are IPX's (network, node).
+int		SYS_IpxStartup (const char *server, int serve);	// server: "host[:port]"; serve: be the server (port)
+void	SYS_IpxSend (const unsigned char *addr, const void *data, int len);
+int		SYS_IpxGet (void *buf, int max, unsigned char *from);
+void	SYS_IpxMyAddr (unsigned char *addr);
+
 #ifndef SYS_LINUX_IMPL
 #define long int
 #endif

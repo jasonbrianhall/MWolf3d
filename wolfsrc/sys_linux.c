@@ -1672,3 +1672,293 @@ void SYS_NetAddrString (const unsigned char *addr, char *str)
 	ToSockaddr (addr,&sa);
 	sprintf (str,"%s:%d",inet_ntoa (sa.sin_addr),ntohs (sa.sin_port));
 }
+
+
+/*
+=============================================================================
+
+						IPXNET (DOSBox's IPX over UDP)
+
+ Every packet is a whole IPX packet: the 30 byte header (big endian), then
+ the data. A node registers with the server by sending a header with
+ destination socket 2 and node 0; the server answers with one whose
+ destination is the node's address: network 0, node = its IP address and
+ UDP port (as the server sees them). The server passes packets on by the
+ destination node (all ones: to everybody but the sender).
+
+ -ipxnet host[:port] registers with a server (DOSBox's IPXNET STARTSERVER,
+ or another copy of this game); -ipxserver [port] is the server, as well
+ as a node (so DOSBox's IPXNET CONNECT can find us).
+
+=============================================================================
+*/
+
+#define IPXNETPORT	213
+#define IPXSOCKET	0x7135
+#define IPXHDR		30
+#define MAXIPXNODES	16
+
+static	int		ipxsock = -1;
+static	int		ipxserving;
+static	struct sockaddr_in ipxserver;
+static	unsigned char ipxmyaddr[10];
+static	struct sockaddr_in ipxnodes[MAXIPXNODES];	// the server's: who's registered
+static	int		numipxnodes;
+
+// a received packet the server is keeping for the local game
+static	unsigned char ipxlocal[32][700];
+static	int		ipxlocallen[8],ipxlocalhead,ipxlocaltail;
+
+static void IpxHeader (unsigned char *h, int len, const unsigned char *dest, int dsock,
+	const unsigned char *src, int ssock)
+{
+	h[0] = h[1] = 0xff;					// no checksum
+	h[2] = len >> 8;
+	h[3] = len;
+	h[4] = 0;							// transport control
+	h[5] = 4;							// packet type: IPX
+	memcpy (h+6,dest,10);
+	h[16] = dsock >> 8;
+	h[17] = dsock;
+	memcpy (h+18,src,10);
+	h[28] = ssock >> 8;
+	h[29] = ssock;
+}
+
+static void NodeOf (const struct sockaddr_in *sa, unsigned char *addr)
+{
+	memset (addr,0,4);					// network 0
+	memcpy (addr+4,&sa->sin_addr.s_addr,4);
+	memcpy (addr+8,&sa->sin_port,2);
+}
+
+static int IsBroadcast (const unsigned char *addr)
+{
+	int i;
+
+	for (i=4;i<10;i++)
+		if (addr[i] != 0xff)
+			return 0;
+	return 1;
+}
+
+static void Keep (const unsigned char *pkt, int len)		// for the local game
+{
+	int n = (ipxlocalhead+1) & 31;
+
+	if (n == ipxlocaltail || len > (int)sizeof(ipxlocal[0]))
+		return;							// (full: lost, as on a network)
+	memcpy (ipxlocal[ipxlocalhead],pkt,len);
+	ipxlocallen[ipxlocalhead] = len;
+	ipxlocalhead = n;
+}
+
+//
+// Relay: the server passes a packet on (from: the node it came from, or
+// NULL for our own)
+//
+static void Relay (const unsigned char *pkt, int len, const struct sockaddr_in *from)
+{
+	const unsigned char *dest = pkt+6;
+	unsigned char	node[10];
+	int		i;
+
+	for (i=0;i<numipxnodes;i++)
+	{
+		if (from && ipxnodes[i].sin_addr.s_addr == from->sin_addr.s_addr
+		&& ipxnodes[i].sin_port == from->sin_port)
+			continue;					// not back to the sender
+		NodeOf (&ipxnodes[i],node);
+		if (IsBroadcast (dest) || !memcmp (dest+4,node+4,6))
+			sendto (ipxsock,pkt,len,0,(struct sockaddr *)&ipxnodes[i],sizeof(ipxnodes[i]));
+	}
+	if (from && (IsBroadcast (dest) || !memcmp (dest+4,ipxmyaddr+4,6)))
+		Keep (pkt,len);
+}
+
+static void Register (const struct sockaddr_in *from)
+{
+	unsigned char	h[IPXHDR],node[10],me[10];
+	int		i;
+
+	for (i=0;i<numipxnodes;i++)
+		if (ipxnodes[i].sin_addr.s_addr == from->sin_addr.s_addr
+		&& ipxnodes[i].sin_port == from->sin_port)
+			break;
+	if (i == numipxnodes)
+	{
+		if (numipxnodes == MAXIPXNODES)
+			return;
+		ipxnodes[numipxnodes++] = *from;
+		fprintf (stderr,"IPX server: %s:%d connected\n",inet_ntoa (from->sin_addr),ntohs (from->sin_port));
+	}
+	NodeOf (from,node);
+	memcpy (me,ipxmyaddr,10);
+	me[3] = 1;							// (DOSBox's server says network 1)
+	IpxHeader (h,IPXHDR,node,2,me,2);
+	sendto (ipxsock,h,IPXHDR,0,(struct sockaddr *)from,sizeof(*from));
+}
+
+int SYS_IpxStartup (const char *server, int serve)
+{
+	struct sockaddr_in sa;
+	unsigned char	h[IPXHDR],zero[10],buf[700];
+	socklen_t		salen;
+	int		try,n,port;
+	char	host[256],*colon;
+	struct addrinfo hints,*res;
+
+	ipxsock = socket (AF_INET,SOCK_DGRAM,0);
+	if (ipxsock < 0)
+		return 0;
+	memset (&sa,0,sizeof(sa));
+	sa.sin_family = AF_INET;
+	sa.sin_addr.s_addr = htonl (INADDR_ANY);
+	sa.sin_port = htons (serve ? serve : 0);
+	if (bind (ipxsock,(struct sockaddr *)&sa,sizeof(sa)))
+	{
+		if (serve == IPXNETPORT && errno == EACCES)
+		{
+			// 213 is for root: the next best thing
+			serve = 21300;
+			sa.sin_port = htons (serve);
+			if (!bind (ipxsock,(struct sockaddr *)&sa,sizeof(sa)))
+				goto bound;
+		}
+		fprintf (stderr,"IPX: UDP port %d: %s\n",serve,strerror (errno));
+		return 0;
+	}
+bound:
+
+	if (serve)
+	{
+		// our own node: a made up address no real one has (127.0.0.2)
+		ipxserving = 1;
+		memset (ipxmyaddr,0,10);
+		ipxmyaddr[4] = 127; ipxmyaddr[7] = 2;
+		ipxmyaddr[8] = serve >> 8;
+		ipxmyaddr[9] = serve;
+		if (serve == IPXNETPORT)
+			printf ("IPX server on UDP port %d (in DOSBox: IPXNET CONNECT <this machine>)\n",serve);
+		else
+			printf ("IPX server on UDP port %d (in DOSBox: IPXNET CONNECT <this machine> %d)\n",serve,serve);
+		fcntl (ipxsock,F_SETFL,fcntl (ipxsock,F_GETFL) | O_NONBLOCK);
+		return 1;
+	}
+
+	// a client: register with the server
+	strncpy (host,server,sizeof(host)-1);
+	host[sizeof(host)-1] = 0;
+	port = IPXNETPORT;
+	colon = strrchr (host,':');
+	if (colon)
+	{
+		*colon = 0;
+		port = atoi (colon+1);
+	}
+	memset (&hints,0,sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_DGRAM;
+	if (getaddrinfo (host,NULL,&hints,&res) || !res)
+	{
+		fprintf (stderr,"IPX: can't find %s\n",host);
+		return 0;
+	}
+	memcpy (&ipxserver,res->ai_addr,sizeof(ipxserver));
+	freeaddrinfo (res);
+	ipxserver.sin_port = htons (port);
+
+	memset (zero,0,10);
+	IpxHeader (h,IPXHDR,zero,2,zero,2);
+	for (try=0;try<6;try++)
+	{
+		sendto (ipxsock,h,IPXHDR,0,(struct sockaddr *)&ipxserver,sizeof(ipxserver));
+		{
+			fd_set	fds;
+			struct timeval tv = {1,0};
+			FD_ZERO (&fds);
+			FD_SET (ipxsock,&fds);
+			if (select (ipxsock+1,&fds,NULL,NULL,&tv) <= 0)
+				continue;
+		}
+		salen = sizeof(sa);
+		n = recvfrom (ipxsock,buf,sizeof(buf),0,(struct sockaddr *)&sa,&salen);
+		if (n >= IPXHDR && buf[16] == 0 && buf[17] == 2)
+		{
+			memcpy (ipxmyaddr,buf+6,10);	// what the server calls us
+			fcntl (ipxsock,F_SETFL,fcntl (ipxsock,F_GETFL) | O_NONBLOCK);
+			return 1;
+		}
+	}
+	fprintf (stderr,"IPX: no answer from the IPX server at %s:%d\n",host,port);
+	return 0;
+}
+
+void SYS_IpxSend (const unsigned char *addr, const void *data, int len)
+{
+	unsigned char pkt[IPXHDR+600];
+
+	if (ipxsock < 0 || len > 600)
+		return;
+	IpxHeader (pkt,IPXHDR+len,addr,IPXSOCKET,ipxmyaddr,IPXSOCKET);
+	memcpy (pkt+IPXHDR,data,len);
+	if (ipxserving)
+		Relay (pkt,IPXHDR+len,NULL);
+	else
+		sendto (ipxsock,pkt,IPXHDR+len,0,(struct sockaddr *)&ipxserver,sizeof(ipxserver));
+}
+
+int SYS_IpxGet (void *buf, int max, unsigned char *from)
+{
+	unsigned char	pkt[700];
+	struct sockaddr_in sa;
+	socklen_t		salen;
+	int		n;
+
+	if (ipxsock < 0)
+		return 0;
+	for (;;)
+	{
+		if (ipxserving)
+		{
+			// take in what's come, passing it on; then what's for us
+			salen = sizeof(sa);
+			n = recvfrom (ipxsock,pkt,sizeof(pkt),0,(struct sockaddr *)&sa,&salen);
+			if (n >= IPXHDR)
+			{
+				if (pkt[16] == 0 && pkt[17] == 2 && !pkt[10] && !pkt[11] && !pkt[12] && !pkt[13])
+					Register (&sa);
+				else if (pkt[16] == 0 && pkt[17] == 2)
+					;						// (an IPXNET ping: never mind)
+				else
+					Relay (pkt,n,&sa);
+				continue;
+			}
+			if (ipxlocaltail == ipxlocalhead)
+				return 0;
+			n = ipxlocallen[ipxlocaltail];
+			memcpy (pkt,ipxlocal[ipxlocaltail],n);
+			ipxlocaltail = (ipxlocaltail+1) & 31;
+		}
+		else
+		{
+			salen = sizeof(sa);
+			n = recvfrom (ipxsock,pkt,sizeof(pkt),0,(struct sockaddr *)&sa,&salen);
+			if (n <= 0)
+				return 0;
+		}
+		if (n < IPXHDR || pkt[16] != (IPXSOCKET >> 8) || pkt[17] != (IPXSOCKET & 0xff))
+			continue;						// not the game's
+		memcpy (from,pkt+18,10);
+		n -= IPXHDR;
+		if (n > max)
+			n = max;
+		memcpy (buf,pkt+IPXHDR,n);
+		return n;
+	}
+}
+
+void SYS_IpxMyAddr (unsigned char *addr)
+{
+	memcpy (addr,ipxmyaddr,10);
+}
