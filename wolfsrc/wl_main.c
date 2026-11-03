@@ -228,6 +228,9 @@ static void ShowHelp (void)
 "                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -connect HOST[:PORT]     a game that's not on the local network\n"
+"  -ipxnet HOST[:PORT]      play with DOS players: IPX through DOSBox's IPXNET\n"
+"                           server (IPXNET STARTSERVER) instead of UDP\n"
+"  -ipxserver [PORT]        be that server (DOSBox: IPXNET CONNECT this-host)\n"
 "  -netlog                  write NETLOG.TXT\n",
 		_argv[0]);
 #else
