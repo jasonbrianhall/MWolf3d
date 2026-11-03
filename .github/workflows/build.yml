@@ -120,6 +120,12 @@ jobs:
                      Friendly fire is on unless -nofriendlyfire.
                      Esc leaves the game. T: chat (Enter sends); while
                      typing, Alt+1..Alt+0 send the macros SETUP edits.
+          Deathmatch: WOLF3D -deathmatch -name YOURNAME (or IPXSETUP's
+                     network screen). The first one starts the game, the
+                     others join and leave whenever they like (2 to 4).
+                     Everyone has every weapon and both keys; no enemies;
+                     the exit is shut. SCORE is your frags; Tab shows
+                     everybody's. -host / -join: only start / only join.
 
           Version:   ${VERSION}
           Built from: ${GITHUB_REPOSITORY}@${GITHUB_SHA}
@@ -151,5 +157,103 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux:
+    # the Linux (SDL2) build, added to the same release
+    needs: build
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SDL2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="v$(date -u +%Y%m%d)"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build wolf3d / spear for each kind of data
+        run: |
+          mkdir -p release
+          for v in wl6 wl6apo wl1 sod sdm; do
+            case $v in sod|sdm) exe=spear ;; *) exe=wolf3d ;; esac
+            make VERSION=$v
+            dir=release/$(echo $v | tr a-z A-Z)
+            mkdir -p $dir
+            strip $exe
+            cp $exe $dir/
+            case $v in wl6apo) ext=WL6 ;; *) ext=$(echo $v | tr a-z A-Z) ;; esac
+            cp ../msdos/PLAYERS.WL6 $dir/PLAYERS.$ext
+            cp ../msdos/RESPAWN.WAD ../msdos/FREEDOOM.TXT $dir/
+            rm -f $exe
+          done
+
+      - name: Create release archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cat > release/README.TXT << EOF
+          Wolfenstein 3-D - Linux (SDL2)
+
+          The id Software source, built for Linux with SDL2 (install it:
+          Debian/Ubuntu: sudo apt install libsdl2-2.0-0). No game data is
+          included: copy your game's data files into the directory that
+          matches them, or run the program with -data <directory>.
+
+            WL6/wolf3d     Wolfenstein 3-D 1.4, GT / Activision / id
+                           (the version sold on Steam and GOG)
+            WL6APO/wolf3d  Wolfenstein 3-D 1.4, Apogee registered
+            WL1/wolf3d     Wolfenstein 3-D 1.4, Apogee shareware
+            SOD/spear      Spear of Destiny
+            SDM/spear      Spear of Destiny demo
+
+          Files: AUDIOHED.* AUDIOT.* GAMEMAPS.* MAPHEAD.* VGADICT.*
+          VGAGRAPH.* VGAHEAD.* VSWAP.* (upper or lower case).
+
+          Options:   ./wolf3d --help. -fullscreen (or Alt+Enter),
+                     -widescreen, -smooth, -nosound, -data DIR.
+          Co-op:     ./wolf3d -nodes 2 [-episode 1] [-level 1] [-skill 2]
+          Deathmatch: ./wolf3d -deathmatch -name YOURNAME
+                     The first one starts the game, the others join (and
+                     leave) whenever they like. Everyone has every weapon
+                     and both keys, no enemies, the exit is shut; SCORE is
+                     your frags, Tab shows everybody's.
+          Network:   UDP port 27135 on the local network; -port N for
+                     another, -connect host[:port] for a game elsewhere.
+
+          Version:   ${VERSION}
+          Built from: ${GITHUB_REPOSITORY}@${GITHUB_SHA}
+          EOF
+          tar -C release -czf "wolf3d-linux-x86_64-${VERSION}.tar.gz" README.TXT WL6 WL6APO WL1 SOD SDM
+          tar -tzf wolf3d-linux-x86_64-*.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wolf3d-linux-${{ steps.version.outputs.version }}
+          path: linux/wolf3d-linux-*.tar.gz
+          if-no-files-found: error
+
+      - name: Add to the GitHub Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          files: linux/wolf3d-linux-*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
