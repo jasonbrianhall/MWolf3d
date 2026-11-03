@@ -26,6 +26,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <termios.h>
 #include <fnmatch.h>
 #include <link.h>
@@ -1655,6 +1657,44 @@ void SYS_NetBroadcastAddr (unsigned char *addr, int port)
 	sa.sin_addr.s_addr = htonl (INADDR_BROADCAST);
 	sa.sin_port = htons (port ? port : netport);
 	FromSockaddr (&sa,addr);
+}
+
+//
+// SYS_NetInterfaces: each network interface's broadcast address (with
+// port), for machines where 255.255.255.255 only goes out of one of them;
+// names: a line about them, for the log
+//
+int SYS_NetInterfaces (unsigned char (*addrs)[10], int max, int port, char *names, int nameslen)
+{
+	struct ifaddrs *list,*i;
+	struct sockaddr_in sa;
+	int		n = 0;
+	char	one[100];
+
+	names[0] = 0;
+	if (getifaddrs (&list))
+		return 0;
+	for (i=list;i;i=i->ifa_next)
+	{
+		if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || !(i->ifa_flags & IFF_UP))
+			continue;
+		snprintf (one,sizeof(one),"%s%s %s",names[0] ? ", " : "",i->ifa_name,
+			inet_ntoa (((struct sockaddr_in *)i->ifa_addr)->sin_addr));
+		if ((i->ifa_flags & IFF_BROADCAST) && i->ifa_broadaddr && !(i->ifa_flags & IFF_LOOPBACK))
+		{
+			memcpy (&sa,i->ifa_broadaddr,sizeof(sa));
+			snprintf (one+strlen (one),sizeof(one)-strlen (one)," (broadcast %s)",inet_ntoa (sa.sin_addr));
+			if (n < max)
+			{
+				sa.sin_port = htons (port ? port : netport);
+				FromSockaddr (&sa,addrs[n++]);
+			}
+		}
+		if (strlen (names)+strlen (one) < (size_t)nameslen)
+			strcat (names,one);
+	}
+	freeifaddrs (list);
+	return n;
 }
 
 //

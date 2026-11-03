@@ -1650,6 +1650,7 @@ void Quit (char *error)
 	memptr	screen;
 	extern	int		grhandle;
 
+	GameLog (error && *error ? "Quit: %s" : "Quit%s",error ? error : "");
 	if (virtualreality)
 	{
 		__dpmi_regs	r;

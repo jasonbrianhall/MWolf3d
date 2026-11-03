@@ -93,6 +93,15 @@ dropped after 8 seconds and the rest play on. Names (``-name``, or NAME.CFG, whi
 in the chat, the kills and the score table, in co-op too. IPXSETUP's
 network screen has a Co-op / Deathmatch choice and the name.
 
+Every run adds to ``WOLFLOG.TXT`` (in the game's directory) what it
+decided and why: the command line (and what SETUP/IPXSETUP ran), single
+player, co-op or deathmatch, the network (interfaces, broadcast
+addresses, ``-connect``), which game answered or that nobody did (then a
+deathmatch starts a new game, alone till someone joins: it says so on
+the screen too), another version of the game being out there, joins,
+leaves, levels, kills and chat, and why it quit. On Linux it also goes to
+the terminal.
+
 ``-widescreen`` (or Widescreen in SETUP's Display screen) is for 16:9
 monitors: the game draws its pages in main memory instead of planar VGA
 memory and shows them in a 16:9 (or 16:10) VESA mode, 8 bit or 15/16/24/32
