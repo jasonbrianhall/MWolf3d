@@ -192,11 +192,11 @@ jobs:
           mkdir -p release
           for v in wl6 wl6apo wl1 sod sdm; do
             case $v in sod|sdm) exe=spear ;; *) exe=wolf3d ;; esac
-            make VERSION=$v
+            make VERSION=$v $exe setup
             dir=release/$(echo $v | tr a-z A-Z)
             mkdir -p $dir
-            strip $exe
-            cp $exe $dir/
+            strip $exe setup ipxsetup
+            cp $exe setup ipxsetup $dir/
             case $v in wl6apo) ext=WL6 ;; *) ext=$(echo $v | tr a-z A-Z) ;; esac
             cp ../msdos/PLAYERS.WL6 $dir/PLAYERS.$ext
             cp ../msdos/RESPAWN.WAD ../msdos/FREEDOOM.TXT $dir/
@@ -226,6 +226,10 @@ jobs:
 
           Options:   ./wolf3d --help. -fullscreen (or Alt+Enter),
                      -widescreen, -smooth, -nosound, -data DIR.
+          Setup:     ./setup (in a terminal) sets sound, keys, mouse and
+                     view size, as the DOS SETUP.EXE does; ./ipxsetup is
+                     the network game menu (co-op / deathmatch, your
+                     name, where to connect). Both take -data DIR.
           Co-op:     ./wolf3d -nodes 2 [-episode 1] [-level 1] [-skill 2]
           Deathmatch: ./wolf3d -deathmatch -name YOURNAME
                      The first one starts the game, the others join (and

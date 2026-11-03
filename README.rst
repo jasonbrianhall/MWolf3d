@@ -159,6 +159,14 @@ and SDL2 (Debian/Ubuntu: ``sudo apt install build-essential libsdl2-dev``)::
   make VERSION=wl1        # (the same VERSIONs as for DOS: wl6 wl6apo wl1 sod sdm)
   ./wolf3d -data ~/wolf3d # or run it in the directory with the data
 
+``make`` also makes ``setup`` and ``ipxsetup``: the DOS SETUP and
+IPXSETUP, in the terminal (same blue screens, same CONFIG, NAME.CFG and
+WOLFNET.CFG files; ``-data DIR`` as for the game). They run ``wolf3d``
+(or ``spear``) from next to themselves, or from the current directory.
+A terminal can't tell Ctrl, Alt or Shift pressed by themselves, so in
+the keyboard screen F1 to F4 stand for Ctrl, Alt, left and right Shift.
+IPXSETUP's network screen also has a "Connect to" (``-connect``).
+
 The data files can be in upper or lower case. ``-fullscreen`` (or
 Alt+Enter), ``-widescreen`` (a 16:9 view), ``-smooth`` (no square
 pixels), ``-nosound``; ``./wolf3d --help`` lists the rest. A click in the

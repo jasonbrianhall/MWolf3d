@@ -4,6 +4,8 @@
 #   make VERSION=wl1  for the shareware data (wl6, wl6apo, wl1, sod, sdm:
 #                     as for msdos/Makefile)
 #   make run DATA=dir run it with the game's files in dir
+#   make setup        setup and ipxsetup (the same program; any data), the
+#                     DOS version's SETUP / IPXSETUP in the terminal
 #   make clean
 #
 # Needs a C and C++ compiler and SDL2 (Debian / Ubuntu: build-essential
@@ -68,7 +70,12 @@ endif
 OBJS := $(addprefix $(BUILD)/,$(addsuffix .o,$(WOLF_SRC))) $(BUILD)/dbopl.o $(BUILD)/oplemu.o
 HDRS := $(wildcard $(SRC)/*.h)
 
-all: $(EXENAME)
+all: $(EXENAME) setup
+
+# SETUP / IPXSETUP (msdos/setup.c): one program for every VERSION
+setup: ../msdos/setup.c Makefile
+	$(CC) -O2 -std=gnu99 -w -o $@ ../msdos/setup.c
+	cp $@ ipxsetup
 
 $(EXENAME): $(OBJS)
 	$(CXX) $(ALLLDFLAGS) $(OBJS) $(SDL_LIBS) -lm -o $@
@@ -87,7 +94,7 @@ run: $(EXENAME)
 	./$(EXENAME) -data $(DATA) $(ARGS)
 
 clean:
-	rm -rf build wolf3d spear
+	rm -rf build wolf3d spear setup ipxsetup
 
 # (always linked again: wolf3d is the same name for wl6, wl6apo and wl1)
 .PHONY: all run clean $(EXENAME)

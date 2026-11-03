@@ -13,6 +13,12 @@
  *
  * The CONFIG layout is the original's: the high score table, then
  * 16-bit sound, control and view settings.
+ *
+ * The same program builds for Linux (linux/Makefile makes setup and
+ * ipxsetup): the blue screens are drawn in the terminal (an 80x25 screen
+ * in memory, as DOS had it, put on the terminal with ANSI codes), the
+ * keys come from the terminal, and the game is wolf3d (or spear), looked
+ * for next to this program, then in the current directory.
  */
 
 #include <stdio.h>
@@ -21,10 +27,24 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <strings.h>
+#include <termios.h>
+#include <errno.h>
+#include <signal.h>
+#include <dirent.h>
+#include <limits.h>
+#include <sys/select.h>
+#define stricmp		strcasecmp
+#define strnicmp	strncasecmp
+static FILE *CaseFopen (const char *name, const char *mode);
+#define fopen		CaseFopen
+#else
 #include <process.h>
 #include <dpmi.h>
 #include <go32.h>
 #include <sys/farptr.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* the CONFIG file                                                     */
@@ -72,10 +92,57 @@ static const highscore_t defscores[MAXSCORES] =
 	{"Jay Wilbur",10000,1,0},
 };
 
+#ifdef __linux__
+/*
+ * The data files can be in upper or lower case: a name that isn't there
+ * as written is looked for whatever its case (in the current directory)
+ */
+static int FindCase (const char *name, char *out, int outlen)
+{
+	DIR		*d;
+	struct dirent *e;
+
+	if (access (name,F_OK) == 0)
+	{
+		snprintf (out,outlen,"%s",name);
+		return 1;
+	}
+	if (strchr (name,'/') || !(d = opendir (".")))
+		return 0;
+	while ((e = readdir (d)) != NULL)
+		if (!strcasecmp (e->d_name,name))
+		{
+			snprintf (out,outlen,"%s",e->d_name);
+			closedir (d);
+			return 1;
+		}
+	closedir (d);
+	return 0;
+}
+
+#undef fopen
+static FILE *CaseFopen (const char *name, const char *mode)
+{
+	char real[NAME_MAX+1];
+
+	return fopen (FindCase (name,real,sizeof(real)) ? real : name,mode);
+}
+#define fopen		CaseFopen
+
+static int Exists (const char *name)
+{
+	char real[NAME_MAX+1];
+
+	return FindCase (name,real,sizeof(real)) && access (real,R_OK) == 0;
+}
+
+static char		gamepath[PATH_MAX];		// the game program, found
+#else
 static int Exists (const char *name)
 {
 	return access (name,R_OK) == 0;
 }
+#endif
 
 static void FindGame (void)
 {
@@ -99,6 +166,28 @@ static void FindGame (void)
 		i = 0;
 	strcpy (dataext,games[i].ext);
 	strcpy (gameexe,games[i].exe);
+#ifdef __linux__
+	{
+		// wolf3d / spear: next to this program, or here
+		char	dir[PATH_MAX],*slash;
+		int		n;
+
+		for (n=0;gameexe[n];n++)
+			gameexe[n] = tolower (gameexe[n]);
+		gameexe[strlen (gameexe)-4] = 0;		// no .exe
+		n = readlink ("/proc/self/exe",dir,sizeof(dir)-1);
+		if (n > 0)
+		{
+			dir[n] = 0;
+			slash = strrchr (dir,'/');
+			if (slash)
+				*slash = 0;
+			snprintf (gamepath,sizeof(gamepath),"%s/%s",dir,gameexe);
+		}
+		if (n <= 0 || access (gamepath,X_OK))
+			snprintf (gamepath,sizeof(gamepath),"./%s",gameexe);
+	}
+#endif
 	sprintf (cfgname,"CONFIG.%s",dataext);
 	episodes = games[i].episodes;
 	levels = games[i].levels;
@@ -245,6 +334,7 @@ static int SaveConfig (void)
 #define NAMELEN		15
 static int		net_nodes = 2,net_episode = 1,net_level = 1,net_skill = 2,net_ff = 1,net_dm;
 static char		net_name[MACROLEN+1],oldname[MACROLEN+1];
+static char		net_connect[MACROLEN+1];		// Linux: -connect (host[:port])
 
 static void LoadNet (void)
 {
@@ -263,6 +353,8 @@ static void LoadNet (void)
 	if (!f)
 		return;
 	fscanf (f,"%d %d %d %d %d %d",&net_nodes,&net_episode,&net_level,&net_skill,&net_ff,&net_dm);
+	if (fscanf (f," connect=%60s",net_connect) != 1)
+		net_connect[0] = 0;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -279,6 +371,8 @@ static void SaveNet (void)
 	if (f)
 	{
 		fprintf (f,"%d %d %d %d %d %d\n",net_nodes,net_episode,net_level,net_skill,net_ff,net_dm);
+		if (net_connect[0])
+			fprintf (f,"connect=%s\n",net_connect);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -300,6 +394,128 @@ static void SaveNet (void)
 #define YELLOW		0x1e
 #define BOX			0x1b			// cyan on blue
 
+#ifdef __linux__
+/*
+ * The terminal: the screen is kept as DOS kept it (character, attribute)
+ * and what changed is drawn before every wait for a key
+ */
+static uint16_t	screen[25*80],shown[25*80];
+static int		termon,cursoron;
+static struct termios oldterm;
+
+static void Poke (int x, int y, int ch, int attr)
+{
+	if (x >= 0 && x < 80 && y >= 0 && y < 25)
+		screen[y*80+x] = (ch & 0xff) | (attr << 8);
+}
+
+// code page 437, as UTF-8
+static const char *cp437[256] =
+{
+	" ","\xe2\x98\xba","\xe2\x98\xbb","\xe2\x99\xa5","\xe2\x99\xa6","\xe2\x99\xa3","\xe2\x99\xa0","\xe2\x80\xa2","\xe2\x97\x98","\xe2\x97\x8b","\xe2\x97\x99","\xe2\x99\x82","\xe2\x99\x80","\xe2\x99\xaa","\xe2\x99\xab","\xe2\x98\xbc",
+	"\xe2\x96\xba","\xe2\x97\x84","\xe2\x86\x95","\xe2\x80\xbc","\xc2\xb6","\xc2\xa7","\xe2\x96\xac","\xe2\x86\xa8","\xe2\x86\x91","\xe2\x86\x93","\xe2\x86\x92","\xe2\x86\x90","\xe2\x88\x9f","\xe2\x86\x94","\xe2\x96\xb2","\xe2\x96\xbc",
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"\xe2\x8c\x82",
+	"\xc3\x87","\xc3\xbc","\xc3\xa9","\xc3\xa2","\xc3\xa4","\xc3\xa0","\xc3\xa5","\xc3\xa7","\xc3\xaa","\xc3\xab","\xc3\xa8","\xc3\xaf","\xc3\xae","\xc3\xac","\xc3\x84","\xc3\x85",
+	"\xc3\x89","\xc3\xa6","\xc3\x86","\xc3\xb4","\xc3\xb6","\xc3\xb2","\xc3\xbb","\xc3\xb9","\xc3\xbf","\xc3\x96","\xc3\x9c","\xc2\xa2","\xc2\xa3","\xc2\xa5","\xe2\x82\xa7","\xc6\x92",
+	"\xc3\xa1","\xc3\xad","\xc3\xb3","\xc3\xba","\xc3\xb1","\xc3\x91","\xc2\xaa","\xc2\xba","\xc2\xbf","\xe2\x8c\x90","\xc2\xac","\xc2\xbd","\xc2\xbc","\xc2\xa1","\xc2\xab","\xc2\xbb",
+	"\xe2\x96\x91","\xe2\x96\x92","\xe2\x96\x93","\xe2\x94\x82","\xe2\x94\xa4","\xe2\x95\xa1","\xe2\x95\xa2","\xe2\x95\x96","\xe2\x95\x95","\xe2\x95\xa3","\xe2\x95\x91","\xe2\x95\x97","\xe2\x95\x9d","\xe2\x95\x9c","\xe2\x95\x9b","\xe2\x94\x90",
+	"\xe2\x94\x94","\xe2\x94\xb4","\xe2\x94\xac","\xe2\x94\x9c","\xe2\x94\x80","\xe2\x94\xbc","\xe2\x95\x9e","\xe2\x95\x9f","\xe2\x95\x9a","\xe2\x95\x94","\xe2\x95\xa9","\xe2\x95\xa6","\xe2\x95\xa0","\xe2\x95\x90","\xe2\x95\xac","\xe2\x95\xa7",
+	"\xe2\x95\xa8","\xe2\x95\xa4","\xe2\x95\xa5","\xe2\x95\x99","\xe2\x95\x98","\xe2\x95\x92","\xe2\x95\x93","\xe2\x95\xab","\xe2\x95\xaa","\xe2\x94\x98","\xe2\x94\x8c","\xe2\x96\x88","\xe2\x96\x84","\xe2\x96\x8c","\xe2\x96\x90","\xe2\x96\x80",
+	"\xce\xb1","\xc3\x9f","\xce\x93","\xcf\x80","\xce\xa3","\xcf\x83","\xc2\xb5","\xcf\x84","\xce\xa6","\xce\x98","\xce\xa9","\xce\xb4","\xe2\x88\x9e","\xcf\x86","\xce\xb5","\xe2\x88\xa9",
+	"\xe2\x89\xa1","\xc2\xb1","\xe2\x89\xa5","\xe2\x89\xa4","\xe2\x8c\xa0","\xe2\x8c\xa1","\xc3\xb7","\xe2\x89\x88","\xc2\xb0","\xe2\x88\x99","\xc2\xb7","\xe2\x88\x9a","\xe2\x81\xbf","\xc2\xb2","\xe2\x96\xa0"," ",
+};
+
+static void TermOff (void)
+{
+	if (!termon)
+		return;
+	termon = 0;
+	printf ("\033[0m\033[2J\033[H\033[?25h\033[?1049l");
+	fflush (stdout);
+	tcsetattr (0,TCSANOW,&oldterm);
+}
+
+static void TermSignal (int sig)
+{
+	TermOff ();
+	signal (sig,SIG_DFL);
+	raise (sig);
+}
+
+static void TermOn (void)
+{
+	struct termios t;
+
+	if (termon)
+		return;
+	if (!isatty (0) || !isatty (1))
+	{
+		fprintf (stderr,"setup needs a terminal\n");
+		exit (1);
+	}
+	tcgetattr (0,&oldterm);
+	t = oldterm;
+	t.c_lflag &= ~(ICANON | ECHO | ISIG | IEXTEN);
+	t.c_iflag &= ~(IXON | ICRNL | INLCR);
+	t.c_cc[VMIN] = 1;
+	t.c_cc[VTIME] = 0;
+	tcsetattr (0,TCSANOW,&t);
+	termon = 1;
+	atexit (TermOff);
+	signal (SIGTERM,TermSignal);
+	signal (SIGHUP,TermSignal);
+	signal (SIGSEGV,TermSignal);
+	printf ("\033[?1049h\033[?25l\033[2J");
+	memset (shown,0xff,sizeof(shown));		// all of it, the first time
+}
+
+static void Refresh (void)
+{
+	static const int ansi[8] = {0,4,2,6,1,5,3,7};
+	int		i,ch,a,last = -1,at = -1;
+
+	TermOn ();
+	for (i=0;i<25*80;i++)
+	{
+		if (screen[i] == shown[i])
+			continue;
+		shown[i] = screen[i];
+		if (at != i)
+			printf ("\033[%d;%dH",i/80+1,i%80+1);
+		a = screen[i] >> 8;
+		if (a != last)
+		{
+			printf ("\033[0;%d;%dm",(a & 8 ? 90 : 30)+ansi[a & 7],40+ansi[(a >> 4) & 7]);
+			last = a;
+		}
+		ch = screen[i] & 0xff;
+		if (cp437[ch])
+			fputs (cp437[ch],stdout);
+		else
+			putchar (ch);
+		at = i+1;
+	}
+	printf ("\033[0m\033[?25%c",cursoron ? 'h' : 'l');
+	fflush (stdout);
+}
+
+static void Put (int x, int y, const char *s, int attr)
+{
+	for ( ; *s && x < 80 ; s++,x++)
+		Poke (x,y,(unsigned char)*s,attr);
+}
+
+static void Fill (int x, int y, int w, int h, int ch, int attr)
+{
+	int i,j;
+
+	for (j=0;j<h;j++)
+		for (i=0;i<w;i++)
+			Poke (x+i,y+j,ch,attr);
+}
+#else
 static void Put (int x, int y, const char *s, int attr)
 {
 	unsigned long a = TEXTMEM + (y*80+x)*2;
@@ -316,6 +532,7 @@ static void Fill (int x, int y, int w, int h, int ch, int attr)
 		for (i=0;i<w;i++)
 			_farpokew (_dos_ds,TEXTMEM+((y+j)*80+x+i)*2,ch | (attr<<8));
 }
+#endif
 
 static void Box (int x, int y, int w, int h, int attr, const char *title)
 {
@@ -351,12 +568,16 @@ static void Box (int x, int y, int w, int h, int attr, const char *title)
 
 static void Cursor (int on)
 {
+#ifdef __linux__
+	cursoron = on;
+#else
 	__dpmi_regs r;
 
 	memset (&r,0,sizeof(r));
 	r.h.ah = 1;
 	r.x.cx = on ? 0x0607 : 0x2000;
 	__dpmi_int (0x10,&r);
+#endif
 }
 
 static void Background (const char *help)
@@ -376,6 +597,144 @@ static void Background (const char *help)
 /* ------------------------------------------------------------------ */
 /* the keyboard (BIOS)                                                 */
 
+#ifdef __linux__
+/*
+ * The terminal's keys, as the BIOS would give them: scan code << 8 | ASCII
+ * (the grey keys E0h as their ASCII, as INT 16h AH=10h has them)
+ */
+static int ReadByte (int wait)		// -1: nothing within wait ms (-1: forever)
+{
+	fd_set	fds;
+	struct timeval tv;
+	unsigned char c;
+
+	FD_ZERO (&fds);
+	FD_SET (0,&fds);
+	tv.tv_sec = wait/1000;
+	tv.tv_usec = (wait%1000)*1000;
+	if (select (1,&fds,NULL,NULL,wait < 0 ? NULL : &tv) <= 0)
+		return -1;
+	if (read (0,&c,1) != 1)
+		return -2;
+	return c;
+}
+
+static int AsciiScan (int c)		// the US keyboard's scan code of a character
+{
+	static const char lower[] =
+		"\0\0" "1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;'`\0\\zxcvbnm,./";
+	static const char upper[] =
+		"\0\0" "!@#$%^&*()_+\b\tQWERTYUIOP{}\r\0ASDFGHJKL:\"~\0|ZXCVBNM<>?";
+	int i;
+
+	if (c == ' ')
+		return 0x39;
+	for (i=2;i<0x36 && c;i++)
+		if (lower[i] == c || upper[i] == c)
+			return i;
+	return 0;
+}
+
+static int GetKey (void)
+{
+	int		c,n,p[4],np,fin;
+
+	for (;;)
+	{
+		Refresh ();
+		c = ReadByte (-1);
+		if (c == -2)
+			exit (1);							// the terminal's gone
+		if (c < 0)
+			continue;
+		if (c == 27)
+		{
+			c = ReadByte (50);
+			if (c < 0)
+				return 0x011b;					// Esc by itself
+			if (c != '[' && c != 'O')
+				return AsciiScan (c) << 8;		// Alt+key
+			// CSI / SS3: numbers, then a letter or ~
+			np = 0;
+			p[0] = p[1] = 0;
+			fin = 0;
+			for (n=0;n<16;n++)
+			{
+				fin = ReadByte (50);
+				if (fin < 0)
+					return 0x011b;
+				if (fin >= '0' && fin <= '9')
+					p[np] = p[np]*10 + fin-'0';
+				else if (fin == ';')
+				{
+					if (np < 3)
+						p[++np] = 0;
+				}
+				else
+					break;
+			}
+			switch (fin)
+			{
+			case 'A': return 0x48e0;
+			case 'B': return 0x50e0;
+			case 'C': return 0x4de0;
+			case 'D': return 0x4be0;
+			case 'H': return 0x47e0;
+			case 'F': return 0x4fe0;
+			case 'P': return 0x3b00;
+			case 'Q': return 0x3c00;
+			case 'R': return 0x3d00;
+			case 'S': return 0x3e00;
+			case 'M': return 0x1c0d;			// keypad Enter
+			case '~':
+				switch (p[0])
+				{
+				case 1: case 7: return 0x47e0;
+				case 4: case 8: return 0x4fe0;
+				case 2: return 0x52e0;
+				case 3: return 0x53e0;
+				case 5: return 0x49e0;
+				case 6: return 0x51e0;
+				case 11: return 0x3b00;
+				case 12: return 0x3c00;
+				case 13: return 0x3d00;
+				case 14: return 0x3e00;
+				case 15: return 0x3f00;
+				case 17: return 0x4000;
+				case 18: return 0x4100;
+				case 19: return 0x4200;
+				case 20: return 0x4300;
+				case 21: return 0x4400;
+				case 23: return 0x5700;
+				case 24: return 0x5800;
+				}
+			}
+			continue;							// something else: never mind
+		}
+		if (c == '\r' || c == '\n')
+			return 0x1c0d;
+		if (c == 127 || c == 8)
+			return 0x0e08;
+		if (c == '\t')
+			return 0x0f09;
+		if (c == 3)
+			exit (1);							// Ctrl+C
+		if (c < 32)
+			continue;
+		return (AsciiScan (c) << 8) | c;
+	}
+}
+
+static int KeyWaiting (void)
+{
+	fd_set	fds;
+	struct timeval tv = {0,0};
+
+	FD_ZERO (&fds);
+	FD_SET (0,&fds);
+	return select (1,&fds,NULL,NULL,&tv) > 0;
+}
+#else
 static int GetKey (void)			// scan<<8 | ascii
 {
 	__dpmi_regs r;
@@ -395,6 +754,7 @@ static int KeyWaiting (void)
 	__dpmi_int (0x16,&r);
 	return !(r.x.flags & 0x40);
 }
+#endif
 
 #define K_UP	0x48
 #define K_DOWN	0x50
@@ -426,6 +786,31 @@ static int Scan (int key)
  * keyboard handler sees.  Shift, Ctrl and Alt make no keystroke for the
  * BIOS, so they're read from its shift flags.
  */
+#ifdef __linux__
+/*
+ * A terminal says nothing when Shift, Ctrl or Alt alone is pressed: those
+ * are F1-F4 here (the game's F keys aren't for moving and firing anyway)
+ */
+#define GAMEKEYPROMPT	"A key, or F1 Ctrl  F2 Alt  F3 L.Shift  F4 R.Shift"
+
+static int ReadGameKey (void)
+{
+	int key = GetKey ();
+
+	switch (key >> 8)
+	{
+	case K_ESC: return -1;
+	case 0x3b: return 0x1d;
+	case 0x3c: return 0x38;
+	case 0x3d: return 0x2a;
+	case 0x3e: return 0x36;
+	case 0: return -1;
+	}
+	return key >> 8;
+}
+#else
+#define GAMEKEYPROMPT	"Press a key (Esc cancels)"
+
 static int ReadGameKey (void)
 {
 	int flags,old,key;
@@ -453,6 +838,7 @@ static int ReadGameKey (void)
 		__dpmi_yield ();
 	}
 }
+#endif
 
 static const char *KeyName (int scan)
 {
@@ -674,8 +1060,9 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 			else if (f->type == F_KEY)
 			{
 				int k,j;
-				Box (x+w/2-16,y+h/2-1,32,3,0x4f,NULL);
-				Put (x+w/2-13,y+h/2,"Press a key (Esc cancels)",0x4f);
+				int bw = strlen (GAMEKEYPROMPT)+6;
+				Box (40-bw/2,y+h/2-1,bw,3,0x4f,NULL);
+				Put (40-bw/2+3,y+h/2,GAMEKEYPROMPT,0x4f);
 				k = ReadGameKey ();
 				if (k > 0)
 				{
@@ -703,7 +1090,11 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 
 static const char *sfxnames[] = {"Off","PC Speaker","AdLib / SB / UltraSound"};
 static const char *musicnames[] = {"Off","AdLib / SB / UltraSound"};
+#ifdef __linux__
+static const char *diginames[] = {"Off","Off (PC Speaker)","Off (Sound Source)","On"};
+#else
 static const char *diginames[] = {"Off","PC Speaker","Sound Source","Sound Blaster / UltraSound"};
+#endif
 static const char *onoff[] = {"Off","On"};
 static const char *mbuttons[] = {"(nothing)","Fire","Strafe","Run","Open / Use"};
 static const char *joynames[] = {"Off","Port 1","Port 2"};
@@ -721,10 +1112,14 @@ static void SoundScreen (void)
 		{F_CHOICE,"Digitized sound",&cfg.sds,0,3,diginames},
 	};
 
+#ifdef __linux__
+	strcpy (note,"Through SDL: the AdLib is emulated");
+#else
 	if (getenv ("ULTRASND"))
 		sprintf (note,"ULTRASND=%.30s: the UltraSound is used",getenv ("ULTRASND"));
 	else
 		sprintf (note,"BLASTER=%.40s",getenv ("BLASTER") ? getenv ("BLASTER") : "(not set)");
+#endif
 	while (Form ("Sound",f,3,&cursor,note) != -1)
 		;
 }
@@ -781,7 +1176,11 @@ static void MouseScreen (void)
 		jb[i] = cfg.buttonjoy[i]+1;
 	joy = cfg.joystickenabled ? cfg.joystickport+1 : 0;
 
+#ifdef __linux__
+	while (Form ("Mouse and joystick",f,13,&cursor,"No joysticks on Linux yet.") != -1)
+#else
 	while (Form ("Mouse and joystick",f,13,&cursor,NULL) != -1)
+#endif
 		;
 
 	for (i=0;i<3;i++)
@@ -818,7 +1217,11 @@ static void DisplayScreen (void)
 	field_t	f[] =
 	{
 		{F_NUMBER,"View size (4-20)",&cfg.viewsize,4,20},
+#ifdef __linux__
+		{F_CHOICE,"Widescreen (16:9)",&widescreen,0,1,onoff},
+#else
 		{F_CHOICE,"Widescreen (16:9 VESA)",&widescreen,0,1,onoff},
+#endif
 	};
 
 	while (Form ("Display",f,2,&cursor,"20 fills the screen: no border") != -1)
@@ -830,6 +1233,18 @@ static void RunGame (const char *const *args)
 	const char *argv[24];
 	int		n = 0,i;
 
+#ifdef __linux__
+	if (access (gamepath,X_OK))
+	{
+		Background ("");
+		Box (12,10,56,6,0x4f,"Error");
+		Put (15,12,gameexe,0x4f);
+		Put (15+strlen (gameexe),12," isn't here or next to setup:",0x4f);
+		Put (15,13,"build it (cd linux; make), or copy it here",0x4f);
+		GetKey ();
+		return;
+	}
+#else
 	if (!Exists (gameexe))
 	{
 		Background ("");
@@ -839,12 +1254,18 @@ static void RunGame (const char *const *args)
 		GetKey ();
 		return;
 	}
+#endif
 
 	argv[n++] = gameexe;
 	for (i=0;args && args[i] && n < 23;i++)
 		argv[n++] = args[i];
 	argv[n] = NULL;
 
+#ifdef __linux__
+	TermOff ();
+	execv (gamepath,(char *const *)argv);
+	printf ("Couldn't run %s: %s\n",gamepath,strerror (errno));
+#else
 	Fill (0,0,80,25,' ',0x07);
 	Cursor (1);
 	{
@@ -855,6 +1276,7 @@ static void RunGame (const char *const *args)
 	}
 	execv (gameexe,(char *const *)argv);
 	printf ("Couldn't run %s\n",gameexe);
+#endif
 	exit (1);
 }
 
@@ -875,6 +1297,9 @@ static void NetworkScreen (int standalone)
 		{F_NUMBER,"Level",0,1,21,0,0,&net_level},
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
 		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
+#ifdef __linux__
+		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
+#endif
 		{F_TEXT,""},
 		{F_ACTION,"Start the network game",0,0,0,0,1},
 	};
@@ -884,9 +1309,12 @@ static void NetworkScreen (int standalone)
 
 	for (;;)
 	{
-		act = Form ("Network game (IPX)",f,9,&cursor,net_dm ?
-			"Deathmatch: join a game, or start one. Its level counts." :
-			"Everyone runs this; player 1's choices count.");
+#ifdef __linux__
+		act = Form ("Network game (UDP)",f,10,&cursor,
+#else
+		act = Form ("Network game (IPX)",f,9,&cursor,
+#endif
+			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
 		{
 			SaveNet ();
@@ -915,6 +1343,12 @@ static void NetworkScreen (int standalone)
 		args[n++] = "-skill"; args[n++] = sk;
 		if (!net_ff && !net_dm)
 			args[n++] = "-nofriendlyfire";
+#ifdef __linux__
+		if (net_connect[0])
+		{
+			args[n++] = "-connect"; args[n++] = net_connect;
+		}
+#endif
 		args[n] = NULL;
 		RunGame (args);
 	}
@@ -939,8 +1373,12 @@ static int Confirm (const char *question)
 
 static void Restore (void)
 {
+#ifdef __linux__
+	TermOff ();
+#else
 	Fill (0,0,80,25,' ',0x07);
 	Cursor (1);
+#endif
 }
 
 static void MainScreen (void)
@@ -954,7 +1392,11 @@ static void MainScreen (void)
 		{F_ACTION,"Mouse and joystick",0,0,0,0,3},
 		{F_ACTION,"Display",0,0,0,0,4},
 		{F_ACTION,"Chat macros",0,0,0,0,9},
+#ifdef __linux__
+		{F_ACTION,"Network game (co-op, deathmatch)",0,0,0,0,5},
+#else
 		{F_ACTION,"Network game (IPX co-op, deathmatch)",0,0,0,0,5},
+#endif
 		{F_TEXT,""},
 		{F_ACTION,"Save settings and run the game",0,0,0,0,6},
 		{F_ACTION,"Save settings and exit",0,0,0,0,7},
@@ -1003,6 +1445,23 @@ int main (int argc, char **argv)
 	base = base ? base+1 : argv[0];
 	ipx = !strnicmp (base,"ipxsetup",8);
 
+#ifdef __linux__
+	// -data DIR: the game's files (and its settings) are there; the game
+	// runs there too
+	for (i=1;i<argc-1;i++)
+		if (!strcmp (argv[i],"-data"))
+		{
+			if (chdir (argv[i+1]))
+			{
+				printf ("Can't go to %s\n",argv[i+1]);
+				return 1;
+			}
+			memmove (argv+i,argv+i+2,(argc-i-1)*sizeof(*argv));
+			argc -= 2;
+			break;
+		}
+#endif
+
 	FindGame ();
 	LoadConfig ();
 	LoadNet ();
@@ -1020,6 +1479,9 @@ int main (int argc, char **argv)
 			printf ("                      (-nodes N, -episode N, -level N, -skill 0-3,\n");
 			printf ("                       -nofriendlyfire, and any other game option)\n");
 			printf ("  ipxsetup -deathmatch [options]  joins (or starts) a deathmatch\n");
+#ifdef __linux__
+			printf ("  -data DIR           the game's files are in DIR (else the current one)\n");
+#endif
 			return 0;
 		}
 
