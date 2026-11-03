@@ -2109,7 +2109,7 @@ SD_PlaySound(soundnames sound)
 {
 	boolean		ispos;
 	SoundCommon	*s;
-	int	lp,rp;
+	int	lp,rp,pri;
 
 	// an unpositioned sound the game may want to place (wl_net.c: one
 	// another player made); the hook plays it positioned, or returns -1
@@ -2131,7 +2131,10 @@ SD_PlaySound(soundnames sound)
 	if (sound == -1)
 		return(false);
 
-	s = (SoundCommon *)SoundTable[sound];
+	// (with the sound effects off there's no table, and with only digitized
+	// sound nothing's cached: the 16 bit code read a priority from 0000:xxxx)
+	s = SoundTable ? (SoundCommon *)SoundTable[sound] : NULL;
+	pri = s ? s->priority : 0;
 	if ((SoundMode != sdm_Off) && !s)
 		Quit("SD_PlaySound() - Uncached sound");
 
@@ -2139,7 +2142,7 @@ SD_PlaySound(soundnames sound)
 	{
 		if ((DigiMode == sds_PC) && (SoundMode == sdm_PC))
 		{
-			if (s->priority < SoundPriority)
+			if (pri < SoundPriority)
 				return(false);
 
 			SDL_PCStopSound();
@@ -2147,7 +2150,7 @@ SD_PlaySound(soundnames sound)
 			SD_PlayDigitized(DigiMap[sound],lp,rp);
 			SoundPositioned = ispos;
 			SoundNumber = sound;
-			SoundPriority = s->priority;
+			SoundPriority = pri;
 		}
 		else
 		{
@@ -2159,13 +2162,13 @@ SD_PlaySound(soundnames sound)
 			}
 			RESTORE();
 
-			if (s->priority < DigiPriority)
+			if (pri < DigiPriority)
 				return(false);
 
 			SD_PlayDigitized(DigiMap[sound],lp,rp);
 			SoundPositioned = ispos;
 			DigiNumber = sound;
-			DigiPriority = s->priority;
+			DigiPriority = pri;
 		}
 
 		return(true);
