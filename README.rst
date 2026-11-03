@@ -76,7 +76,13 @@ at random, and the ammo, food and first aid kits that are picked up come
 back after 30 seconds. The exit is shut. With ``-monsters`` (Enemies in IPXSETUP) the map's
 guards, dogs and bosses stay in, and one that's killed comes back where
 it started 1 to 2 minutes later, with the respawn (teleport) sound; being killed by one costs no frag.
-The game's starter decides. The SCORE on the status bar is
+The game's starter decides. Every 30 minutes (``-timelimit N`` from
+the game's starter, 0 for never; Time a level in IPXSETUP) the time is up:
+everything stops for a few seconds with the scores up and the winner
+named, then everyone goes on to the next level together (round the
+episode's levels, the secret one too) and the frags start over. The
+scoreboard shows the time left, and there's a warning at 5 minutes, 1
+minute and 10 seconds. The SCORE on the status bar is
 your frags (one for a kill, one off if you die without anyone to thank);
 Tab's automap also shows everybody's frags and deaths, and so does the
 screen while you're dead. Fire or use brings you back after a second,

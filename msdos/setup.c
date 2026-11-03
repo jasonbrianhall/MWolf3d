@@ -335,9 +335,17 @@ static int SaveConfig (void)
 #define NAMELEN		15
 static int		net_nodes = 2,net_episode = 1,net_level = 1,net_skill = 2,net_ff = 1,net_dm;
 static int		net_monsters;					// deathmatch: the enemies too
+static int		net_timelimit = 30;				// deathmatch: minutes a level (0: no limit)
 static char		net_name[MACROLEN+1],oldname[MACROLEN+1];
 static char		net_connect[MACROLEN+1];		// Linux: -connect (host[:port])
 static int		net_ipx;						// Linux: 0 UDP, 1 -ipxnet, 2 -ipxserver
+
+#define NUMTIMES	9
+static const char *timenames[NUMTIMES] =
+	{"No limit","5 minutes","10 minutes","15 minutes","20 minutes","30 minutes",
+	"45 minutes","60 minutes","90 minutes"};
+static const int timeminutes[NUMTIMES] = {0,5,10,15,20,30,45,60,90};
+static int		net_time = 5;					// timenames[]: 30 minutes
 
 static void LoadNet (void)
 {
@@ -362,6 +370,10 @@ static void LoadNet (void)
 		net_ipx = 0;
 	if (fscanf (f," connect=%60s",net_connect) != 1)
 		net_connect[0] = 0;
+	if (!strcmp (net_connect,"-"))
+		net_connect[0] = 0;
+	if (fscanf (f," timelimit=%d",&net_timelimit) != 1 || net_timelimit < 0 || net_timelimit > 999)
+		net_timelimit = 30;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -369,10 +381,15 @@ static void LoadNet (void)
 	if (net_skill < 0 || net_skill > 3) net_skill = 2;
 	net_ff = !!net_ff;
 	net_dm = !!net_dm;
+	for (net_time=0;net_time<NUMTIMES-1 && timeminutes[net_time] < net_timelimit;net_time++)
+		;
 }
 
 static void SaveNet (void)
 {
+	if (net_time >= 0 && net_time < NUMTIMES)
+		net_timelimit = timeminutes[net_time];
+
 	FILE *f = fopen ("WOLFNET.CFG","w");
 
 	if (f)
@@ -380,8 +397,8 @@ static void SaveNet (void)
 		fprintf (f,"%d %d %d %d %d %d\n",net_nodes,net_episode,net_level,net_skill,net_ff,net_dm);
 		fprintf (f,"monsters=%d\n",net_monsters);
 		fprintf (f,"ipx=%d\n",net_ipx);
-		if (net_connect[0])
-			fprintf (f,"connect=%s\n",net_connect);
+		fprintf (f,"connect=%s\n",net_connect[0] ? net_connect : "-");
+		fprintf (f,"timelimit=%d\n",net_timelimit);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -1327,7 +1344,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8];
 	const char *args[16];
 	int		n,act;
 	field_t	f[] =
@@ -1340,6 +1357,7 @@ static void NetworkScreen (int standalone)
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
 		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
 		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
+		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 #ifdef __linux__
 		{F_CHOICE,"Network",0,0,2,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
@@ -1354,9 +1372,9 @@ static void NetworkScreen (int standalone)
 	for (;;)
 	{
 #ifdef __linux__
-		act = Form ("Network game",f,12,&cursor,
+		act = Form ("Network game",f,13,&cursor,
 #else
-		act = Form ("Network game (IPX)",f,10,&cursor,
+		act = Form ("Network game (IPX)",f,11,&cursor,
 #endif
 			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
@@ -1373,11 +1391,13 @@ static void NetworkScreen (int standalone)
 		sprintf (ep,"%d",net_episode);
 		sprintf (lv,"%d",net_level);
 		sprintf (sk,"%d",net_skill);
+		sprintf (tl,"%d",net_timelimit);
 		if (net_dm)
 		{
 			args[n++] = "-deathmatch";
 			if (net_monsters)
 				args[n++] = "-monsters";
+			args[n++] = "-timelimit"; args[n++] = tl;
 		}
 		else
 		{

@@ -225,6 +225,7 @@ static void ShowHelp (void)
 "                           joins a deathmatch (up to 16 players) or starts one\n"
 "                           (-host: start one; -join: wait for one)\n"
 "  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
+"  -timelimit N             deathmatch: the next level after N minutes (30; 0: never)\n"
 "                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -connect HOST[:PORT]     a game that's not on the local network\n"
@@ -265,6 +266,7 @@ static void ShowHelp (void)
 "                           joins a deathmatch (up to 16 players) or starts one\n"
 "                           (-host: start one; -join: wait for one)\n"
 "  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
+"  -timelimit N             deathmatch: the next level after N minutes (30; 0: never)\n"
 "                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -netlog                  write NETLOG.TXT\n",
