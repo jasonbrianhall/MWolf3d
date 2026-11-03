@@ -23,6 +23,8 @@
 //
 // On Linux the packets go over UDP instead of IPX (sys_linux.c).
 
+#include <stdarg.h>
+#include <time.h>
 #include "wl_def.h"
 #ifndef __linux__
 #include <dpmi.h>
@@ -212,6 +214,73 @@ static int *NetPlayerColors (void)
 	}
 	made = true;
 	return colors;
+}
+
+/*
+===================
+=
+= GameLog
+=
+= What the game decided and why (single player or which network game,
+= the network, who's found, joins and leaves, the levels, errors): to
+= WOLFLOG.TXT (added to), and on Linux to the terminal too
+=
+===================
+*/
+
+static void LogLine (char *line)
+{
+	static	FILE	*f;
+	static	boolean	tried;
+	time_t	t;
+	int		l;
+
+	l = strlen (line);
+	while (l && line[l-1] == '\n')
+		line[--l] = 0;
+	if (!tried)
+	{
+		tried = true;
+		f = fopen ("WOLFLOG.TXT","a");
+		if (f)
+		{
+			t = time (NULL);
+			fprintf (f,"\n==== %s",ctime (&t));
+		}
+	}
+	if (f)
+	{
+		fprintf (f,"%s\n",line);
+		fflush (f);
+	}
+}
+
+void GameLog (char *fmt, ...)
+{
+	va_list	ap;
+	char	line[400];
+
+	va_start (ap,fmt);
+	vsnprintf (line,sizeof(line),fmt,ap);
+	va_end (ap);
+#ifdef __linux__
+	fprintf (stderr,"[wolf3d] %s\n",line);
+#endif
+	LogLine (line);
+}
+
+// NetSay: printf, and the log
+static void NetSay (char *fmt, ...)
+{
+	va_list	ap;
+	char	line[400];
+
+	va_start (ap,fmt);
+	vsnprintf (line,sizeof(line),fmt,ap);
+	va_end (ap);
+	fputs (line,stdout);
+	fflush (stdout);
+	LogLine (line);
 }
 
 char *NetName (int p)
@@ -1923,6 +1992,7 @@ static int IPXGet (void *buf, byte *from)
 static	boolean	ipxup;
 static	byte	myaddr[10];
 static	boolean	ipxnet;				// -ipxnet / -ipxserver: DOSBox's IPX, not UDP
+static	boolean	ipxserving;			// -ipxserver
 
 static void IPXSend (int slot, byte *addr, void *data, int len)
 {
@@ -1954,6 +2024,7 @@ static boolean IPXStartup (void)
 			return false;
 		SYS_IpxMyAddr (myaddr);
 		ipxnet = true;
+		ipxserving = serve != 0;
 		ipxup = true;
 		return true;
 	}
@@ -1981,6 +2052,29 @@ static int IPXGet (void *buf, byte *from)
 }
 
 #endif	// __linux__
+
+// an address, for the log
+static char *AddrStr (byte *a)
+{
+	static char	str[4][40];
+	static int	n;
+	char	*s = str[n++ & 3];
+
+#ifdef __linux__
+	if (!ipxnet)
+	{
+		sprintf (s,"%d.%d.%d.%d:%d",a[0],a[1],a[2],a[3],(a[4]<<8)|a[5]);
+		return s;
+	}
+	// IPXNET: the node is the address the server sees
+	sprintf (s,"%02x%02x%02x%02x:%d.%d.%d.%d:%d",a[0],a[1],a[2],a[3],
+		a[4],a[5],a[6],a[7],(a[8]<<8)|a[9]);
+#else
+	sprintf (s,"%02x%02x%02x%02x:%02x%02x%02x%02x%02x%02x",a[0],a[1],a[2],a[3],
+		a[4],a[5],a[6],a[7],a[8],a[9]);
+#endif
+	return s;
+}
 
 
 /*
@@ -2119,7 +2213,7 @@ static	unsigned long mynonce;
 static	boolean	inplay;				// in NetPlayLoop: tell the others when we go
 
 // -connect: where else to say hello (Linux: a game not on this network)
-#define MAXCONTACTS	8
+#define MAXCONTACTS	16
 static	byte	contacts[MAXCONTACTS][10];
 static	int		numcontacts;
 
@@ -2138,6 +2232,8 @@ static	joinrec_t lastjoin;			// the arbiter's last: sent while it's in reach
 static	boolean	havelastjoin;
 static	boolean	dmjoining;			// we're the newcomer
 static	byte	arbaddr[10];		// whom to ask
+static	boolean	dmalone;			// we started the deathmatch: say so in the game
+static	boolean	nobodyanswered;		// ... because nobody answered
 
 static long BiosTicks (void)
 {
@@ -2327,6 +2423,7 @@ static void AddChatLine (char *text, int color)
 {
 	int i;
 
+	GameLog ("%s",text);
 	for (i=0;i<NUMLINES-1;i++)
 	{
 		strcpy (chatlines[i],chatlines[i+1]);
@@ -3326,8 +3423,7 @@ static void NetReceive (void)
 			continue;
 
 		case pk_query:
-			if (deathmatch && inplay && len >= sizeof(querypacket_t)
-			&& ((querypacket_t *)buf)->version == NETVERSION)
+			if (deathmatch && inplay && len >= sizeof(querypacket_t))
 				ReplyInfo (from,((querypacket_t *)buf)->nonce);
 			continue;
 
@@ -3506,9 +3602,9 @@ static void NetTransport (void)
 	if (!IPXStartup ())
 	{
 #ifdef __linux__
-		printf ("Can't start the network (UDP port in use? -port N for another).\n");
+		NetSay ("Can't start the network (UDP port in use? -port N for another).\n");
 #else
-		printf ("No IPX driver found (load one, or use DOSBox's ipx=true and IPXNET).\n");
+		NetSay ("No IPX driver found (load one, or use DOSBox's ipx=true and IPXNET).\n");
 #endif
 		exit (1);
 	}
@@ -3517,20 +3613,54 @@ static void NetTransport (void)
 #ifdef __linux__
 	if (!ipxnet)
 	{
-		// the local network on the usual port (and on ours, if it's another)
+		byte	ifs[8][10];
+		char	names[300];
+		int		n;
+
+		// the local network on the usual port (and on ours, if it's
+		// another), on every interface
 		SYS_NetBroadcastAddr (broadcast,UDPPORT);
 		SYS_NetBroadcastAddr (a,0);
 		if (memcmp (a,broadcast,10))
 			AddContact (a);
+		n = SYS_NetInterfaces (ifs,8,UDPPORT,names,sizeof(names));
+		for (i=0;i<n;i++)
+		{
+			AddContact (ifs[i]);
+			ifs[i][4] = a[4];			// and our port
+			ifs[i][5] = a[5];
+			AddContact (ifs[i]);
+		}
+		GameLog ("Network: UDP, we're on port %d; interfaces: %s",(a[4]<<8)|a[5],names[0] ? names : "none?");
 		for (i=1;i<_argc-1;i++)
 			if (!stricmp (_argv[i],"-connect"))
 			{
 				if (SYS_NetResolve (_argv[i+1],a,UDPPORT))
+				{
 					AddContact (a);
+					GameLog ("-connect %s: %s",_argv[i+1],AddrStr (a));
+				}
 				else
-					printf ("Can't find %s\n",_argv[i+1]);
+				{
+					NetSay ("Can't find %s\n",_argv[i+1]);
+					GameLog ("-connect %s: can't find it",_argv[i+1]);
+				}
 			}
+		{
+			char	str[600];
+			str[0] = 0;
+			for (i=0;i<numcontacts;i++)
+				sprintf (str+strlen (str),"%s%s",i ? ", " : "",AddrStr (contacts[i]));
+			GameLog ("Looking at: %s%s%s",AddrStr (broadcast),numcontacts ? ", " : "",str);
+		}
 	}
+	else
+		GameLog ("Network: IPX over DOSBox's IPXNET (%s); our address %s",
+			ipxserving ? "we're the server" : "a client",AddrStr (myaddr));
+#else
+	GameLog ("Network: IPX; our address %s",AddrStr (myaddr));
+#endif
+#ifdef __linux__
 	{
 		struct timespec ts;
 		clock_gettime (CLOCK_MONOTONIC,&ts);
@@ -3563,7 +3693,7 @@ static void NetStartupDM (void)
 	querypacket_t q;
 	long	start,lastsend;
 	int		i;
-	boolean	host,join;
+	boolean	host,join,heardcoop = false;
 
 	deathmatch = true;
 	numplayers = MAXPLAYERS;
@@ -3591,7 +3721,7 @@ static void NetStartupDM (void)
 		dmfraglimit = 999;
 	if (!host)
 	{
-		printf (join ? "Looking for a deathmatch game (Esc aborts)...\n"
+		NetSay (join ? "Looking for a deathmatch game (Esc aborts)...\n"
 			: "Looking for a deathmatch game to join...\n");
 		memset (&q,0,sizeof(q));
 		q.magic[0] = 'W'; q.magic[1] = '3';
@@ -3609,12 +3739,28 @@ static void NetStartupDM (void)
 			}
 			while (IPXGet (buf,from))
 			{
-				if (buf[0] != 'W' || buf[1] != '3' || buf[2] != pk_info
-				|| ip->version != NETVERSION || ip->nonce != mynonce)
+				if (buf[0] != 'W' || buf[1] != '3')
 					continue;
+				if (buf[2] != pk_info || ip->nonce != mynonce)
+				{
+					if (buf[2] == pk_hello && !heardcoop)
+					{
+						GameLog ("Heard a co-op game (-nodes) at %s: it's not a deathmatch",AddrStr (from));
+						heardcoop = true;
+					}
+					continue;
+				}
+				GameLog ("A deathmatch game answered from %s",AddrStr (from));
+				if (ip->version != NETVERSION)
+				{
+					NetSay ("There's a deathmatch game, but from another version of the game\n"
+						"(network version %d, this is %d): everyone needs the same one.\n",
+						ip->version,NETVERSION);
+					exit (1);
+				}
 				if (ip->build != BuildId ())
 				{
-					printf ("There's a deathmatch game, but it's another build of the game\n"
+					NetSay ("There's a deathmatch game, but it's another build of the game\n"
 						"(everyone needs the same %s).\n",_argv[0]);
 					exit (1);
 				}
@@ -3632,11 +3778,15 @@ static void NetStartupDM (void)
 			}
 			if (dmjoining)
 				break;
-			if (!join && BiosTicks () - start > 36)
-				break;					// two seconds: nobody's playing
+			if (!join && BiosTicks () - start > 91)
+			{
+				GameLog ("Nobody answered in 5 seconds: no deathmatch game to join on the network");
+				nobodyanswered = true;
+				break;					// nobody's playing
+			}
 			if (kbhit () && getch () == 27)
 			{
-				printf ("Aborted.\n");
+				NetSay ("Aborted.\n");
 				exit (1);
 			}
 #ifdef __linux__
@@ -3647,8 +3797,9 @@ static void NetStartupDM (void)
 
 	if (dmjoining)
 	{
-		printf ("Found a game: episode %d, level %d, skill %d%s, %d playing. Joining...\n",
+		NetSay ("Found a game: episode %d, level %d, skill %d%s, %d playing. Joining...\n",
 			hello_episode+1,hello_level+1,hello_skill,dmmonsters ? ", enemies" : "",ip->players);
+		GameLog ("Asking %s to let us in",AddrStr (arbaddr));
 		localplayer = 0;				// till we're told
 		return;
 	}
@@ -3657,16 +3808,17 @@ static void NetStartupDM (void)
 	np[0].gone = np[0].removed = np[0].dead = false;
 	np[0].lastframe = 0x7fffffffl;
 	strcpy (np[0].name,myname);
-	printf ("Started a deathmatch game: episode %d, level %d, skill %d%s.\n",
+	NetSay ("Started a deathmatch game: episode %d, level %d, skill %d%s.\n",
 		hello_episode+1,hello_level+1,hello_skill,
 		dmmonsters ? ", with the enemies (back 1-2 minutes after they die)" : "");
 	if (dmtimelimit && dmfraglimit)
-		printf ("A level is won with %d frags, or ends after %d minutes.\n",dmfraglimit,dmtimelimit);
+		NetSay ("A level is won with %d frags, or ends after %d minutes.\n",dmfraglimit,dmtimelimit);
 	else if (dmtimelimit)
-		printf ("The next level comes every %d minutes.\n",dmtimelimit);
+		NetSay ("The next level comes every %d minutes.\n",dmtimelimit);
 	else if (dmfraglimit)
-		printf ("A level is won with %d frags.\n",dmfraglimit);
-	printf ("Others can join it any time (wolf3d -deathmatch).\n");
+		NetSay ("A level is won with %d frags.\n",dmfraglimit);
+	NetSay ("Others can join it any time (wolf3d -deathmatch).\n");
+	dmalone = true;
 }
 
 /*
@@ -3692,19 +3844,41 @@ void NetStartup (void)
 	hellopacket_t *pk = (hellopacket_t *)buf;
 	int		nodes,found,i,j,len,shown,extra;
 	long	lastsend;
+	boolean	badversion = false;
+
+	{
+		char	cmd[400];
+
+		cmd[0] = 0;
+		for (i=0;i<_argc;i++)
+			if (strlen (cmd)+strlen (_argv[i])+2 < sizeof(cmd))
+			{
+				strcat (cmd,i ? " " : "");
+				strcat (cmd,_argv[i]);
+			}
+		GameLog ("Started: %s",cmd);
+		GameLog ("Build %s %s, network version %d, %d players at most in deathmatch",
+			__DATE__,__TIME__,NETVERSION,MAXPLAYERS);
+	}
 
 	nodes = ParmInt ("-nodes",0);
 	if (Parm ("-deathmatch") || Parm ("-dm"))
 	{
+		GameLog ("Deathmatch (-deathmatch on the command line)%s",
+			Parm ("-host") ? ": -host, a new game" : Parm ("-join") ? ": -join, waiting for a game" : "");
 		NetOptions ();
 		NetStartupDM ();
 		return;
 	}
 	if (!nodes)
+	{
+		GameLog ("Single player: no -deathmatch or -nodes N on the command line");
 		return;
+	}
+	GameLog ("Co-op for %d players (-nodes %d)",nodes,nodes);
 	if (nodes < 1 || nodes > MAXCOOP)
 	{
-		printf ("-nodes must be 1 to %d\n",MAXCOOP);
+		NetSay ("-nodes must be 1 to %d\n",MAXCOOP);
 		exit (1);
 	}
 
@@ -3714,13 +3888,14 @@ void NetStartup (void)
 
 	if (nodes == 1)
 	{
+		GameLog ("-nodes 1: a network game by ourselves, no network");
 		localplayer = 0;
 		return;
 	}
 
 	NetTransport ();
 
-	printf ("Looking for %d players on the network (Esc aborts)...\n",nodes);
+	NetSay ("Looking for %d players on the network (Esc aborts)...\n",nodes);
 
 	memcpy (addrs[0],myaddr,10);
 	nonces[0] = mynonce;
@@ -3758,13 +3933,19 @@ void NetStartup (void)
 
 			if (pk->type == pk_hello)
 			{
+				if (len >= 4 && pk->version != NETVERSION && !badversion)
+				{
+					NetSay ("Someone's running another version of the game (network version %d,\n"
+						"this is %d): everyone needs the same one.\n",pk->version,NETVERSION);
+					badversion = true;
+				}
 				if (len < sizeof(hellopacket_t) || pk->version != NETVERSION)
 					continue;
 				if (pk->nonce == mynonce)
 					continue;				// our own broadcast
 				if (pk->numnodes != nodes)
 				{
-					printf ("Someone started with -nodes %d, ignoring them\n",pk->numnodes);
+					NetSay ("Someone started with -nodes %d, ignoring them\n",pk->numnodes);
 					continue;
 				}
 				for (i=1;i<found;i++)
@@ -3802,7 +3983,7 @@ void NetStartup (void)
 
 		if (found != shown)
 		{
-			printf ("Found %d of %d\n",found,nodes);
+			NetSay ("Found %d of %d\n",found,nodes);
 			shown = found;
 		}
 
@@ -3820,7 +4001,7 @@ void NetStartup (void)
 
 		if (kbhit () && getch () == 27)
 		{
-			printf ("Aborted.\n");
+			NetSay ("Aborted.\n");
 			exit (1);
 		}
 #ifdef __linux__
@@ -3858,7 +4039,7 @@ void NetStartup (void)
 	hello_skill = settings[0][2];
 	hello_ff = settings[0][3];
 
-	printf ("You are player %d of %d: episode %d, level %d, skill %d, friendly fire %s\n",
+	NetSay ("You are player %d of %d: episode %d, level %d, skill %d, friendly fire %s\n",
 		localplayer+1,nodes,hello_episode+1,hello_level+1,hello_skill,hello_ff ? "on" : "off");
 }
 
@@ -3941,6 +4122,8 @@ void NetLevelStart (void)
 
 	if (!rstried)
 		LoadRespawnSound ();	// now, not in the middle of a fight
+	GameLog ("Level: episode %d, floor %d (%s)",gamestate.episode+1,gamestate.mapon+1,
+		deathmatch ? "deathmatch" : "co-op");
 
 	player = np[netcontext].ob;
 	p0 = playerobjs[0];
@@ -4675,6 +4858,8 @@ static void JoinGame (void)
 	len = Unpack (packed,len,raw,SNAPMAX);
 	if (len < 0 || !ReadGame (raw,len))
 		Quit ("The deathmatch game sent a bad snapshot");
+	GameLog ("Joined the deathmatch as player %d: floor %d, frame %ld",localplayer+1,
+		gamestate.mapon+1,netframe);
 
 	// the arbiter's own address is where it sent from
 	memcpy (np[Arbiter ()].addr,arbaddr,10);
@@ -4740,6 +4925,13 @@ void NetPlayLoop (void)
 	}
 	maketic = netframe+NETDELAY;
 	inplay = true;
+	if (dmalone)
+	{
+		dmalone = false;
+		AddChatLine (nobodyanswered ? "No deathmatch game found: you started a new one"
+			: "You started a new deathmatch game",15);
+		AddChatLine ("Others join it with: wolf3d -deathmatch",7);
+	}
 
 	if (MousePresent)
 		Mouse(MDelta);

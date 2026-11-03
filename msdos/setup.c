@@ -22,6 +22,7 @@
  */
 
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -1300,7 +1301,7 @@ static void DisplayScreen (void)
 
 static void RunGame (const char *const *args)
 {
-	const char *argv[24];
+	const char *argv[40];
 	int		n = 0,i;
 
 #ifdef __linux__
@@ -1327,9 +1328,24 @@ static void RunGame (const char *const *args)
 #endif
 
 	argv[n++] = gameexe;
-	for (i=0;args && args[i] && n < 23;i++)
+	for (i=0;args && args[i] && n < 39;i++)
 		argv[n++] = args[i];
 	argv[n] = NULL;
+
+	{
+		// what it runs, for WOLFLOG.TXT (the game adds to it)
+		FILE	*log = fopen ("WOLFLOG.TXT","a");
+		time_t	t = time (NULL);
+
+		if (log)
+		{
+			fprintf (log,"\n==== %ssetup runs:",ctime (&t));
+			for (i=0;argv[i];i++)
+				fprintf (log," %s",argv[i]);
+			fprintf (log,"%s\n",args ? "" : "   (the main menu's \"run the game\": single player)");
+			fclose (log);
+		}
+	}
 
 #ifdef __linux__
 	TermOff ();
@@ -1360,7 +1376,7 @@ static void NetworkScreen (int standalone)
 {
 	static int cursor;
 	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8];
-	const char *args[16];
+	const char *args[32];
 	int		n,act;
 	field_t	f[] =
 	{
