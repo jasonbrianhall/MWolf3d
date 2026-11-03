@@ -718,8 +718,12 @@ static void ReleaseKeys (void)
 	mousebuttons = 0;
 }
 
+static	char	wintitle[64];
+
 static void GrabMouse (int on)
 {
+	char	title[100];
+
 	if (!window || HasArg ("nomouse"))
 		on = 0;
 	if (on == mousegrab)
@@ -727,6 +731,11 @@ static void GrabMouse (int on)
 	mousegrab = on;
 	SDL_SetRelativeMouseMode (on ? SDL_TRUE : SDL_FALSE);
 	SDL_GetRelativeMouseState (NULL,NULL);
+	if (window && !HasArg ("nomouse"))
+	{
+		sprintf (title,"%s - %s",wintitle,on ? "F12 lets the mouse go" : "click to use the mouse");
+		SDL_SetWindowTitle (window,title);
+	}
 }
 
 static void ToggleFullscreen (void)
@@ -786,6 +795,13 @@ void SYS_Poll (void)
 			{
 				if (!ev.key.repeat)
 					ToggleFullscreen ();
+				break;
+			}
+			if (ev.key.keysym.scancode == SDL_SCANCODE_F12
+			|| (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE && (ev.key.keysym.mod & KMOD_SHIFT)))
+			{
+				if (!ev.key.repeat)
+					GrabMouse (!mousegrab);	// F12 (or Shift+Esc): let the mouse go / take it
 				break;
 			}
 			if (ev.key.keysym.scancode == SDL_SCANCODE_PAUSE)
@@ -1010,6 +1026,11 @@ int VESA_Start (int wantw, int wanth)
 	flags = SDL_WINDOW_RESIZABLE;
 	if (HasArg ("-fullscreen"))
 		flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+#ifdef SPEAR
+	strcpy (wintitle,"Spear of Destiny");
+#else
+	strcpy (wintitle,"Wolfenstein 3-D");
+#endif
 #ifdef SPEAR
 	window = SDL_CreateWindow ("Spear of Destiny",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,
 		width*scale,240*scale,flags);
