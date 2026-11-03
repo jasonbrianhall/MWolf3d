@@ -5,3 +5,5 @@ msdos/build/
 msdos/csdpmi/
 msdos/csdpmi7b.zip
 msdos/*.exe
+linux/setup
+linux/ipxsetup
