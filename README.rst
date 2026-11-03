@@ -73,7 +73,10 @@ game, ``-join`` waits for one instead of starting it. There are no
 enemies, no treasure, keys or extra lives on the map; everybody starts
 (and comes back) with every weapon, both keys and 50 rounds, somewhere
 at random, and the ammo, food and first aid kits that are picked up come
-back after 30 seconds. The exit is shut. The SCORE on the status bar is
+back after 30 seconds. The exit is shut. With ``-monsters`` (Enemies in IPXSETUP) the map's
+guards, dogs and bosses stay in, and one that's killed comes back where
+it started 1 to 2 minutes later; being killed by one costs no frag.
+The game's starter decides. The SCORE on the status bar is
 your frags (one for a kill, one off if you die without anyone to thank);
 Tab's automap also shows everybody's frags and deaths, and so does the
 screen while you're dead. Fire or use brings you back after a second,

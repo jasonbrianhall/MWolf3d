@@ -1827,6 +1827,8 @@ void SpawnAngel (int tilex, int tiley)
 #pragma argsused
 void A_Victory (objtype *ob)
 {
+	if (deathmatch)
+		return;					// the game goes on
 	playstate = ex_victorious;
 }
 
@@ -3789,7 +3791,8 @@ void	A_StartDeathCam (objtype *ob)
 
 	if (netgame)				// no replay in co-op: straight to the victory
 	{
-		playstate = ex_victorious;
+		if (!deathmatch)		// (a deathmatch goes on)
+			playstate = ex_victorious;
 		return;
 	}
 

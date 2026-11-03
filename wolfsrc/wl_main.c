@@ -224,6 +224,8 @@ static void ShowHelp (void)
 "  -deathmatch [-episode N] [-level N] [-skill 0-3]\n"
 "                           joins a deathmatch going on, or starts one\n"
 "                           (-host: start one; -join: wait for one)\n"
+"  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
+"                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -connect HOST[:PORT]     a game that's not on the local network\n"
 "  -netlog                  write NETLOG.TXT\n",
@@ -259,6 +261,8 @@ static void ShowHelp (void)
 "  -deathmatch [-episode N] [-level N] [-skill 0-3]\n"
 "                           joins a deathmatch going on, or starts one\n"
 "                           (-host: start one; -join: wait for one)\n"
+"  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
+"                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -netlog                  write NETLOG.TXT\n",
 		_argv[0]);

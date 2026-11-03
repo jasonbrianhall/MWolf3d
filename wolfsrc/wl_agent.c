@@ -555,6 +555,9 @@ void	DrawScore (void)
 
 void	GivePoints (long points)
 {
+	if (deathmatch)
+		return;					// the score is frags
+
 	gamestate.score += points;
 	while (gamestate.score >= gamestate.nextextra)
 	{

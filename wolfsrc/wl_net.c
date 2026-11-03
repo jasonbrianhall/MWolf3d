@@ -41,6 +41,7 @@
 
 boolean	netgame;
 boolean	deathmatch;				// -deathmatch
+boolean	dmmonsters;				// -monsters: the map's enemies are there too
 int		numplayers = 1;
 int		localplayer;
 int		netcontext;
@@ -91,6 +92,9 @@ typedef struct
 #define DMAMMO		50			// ammo after a deathmatch (re)spawn
 #define DMITEMTICS	(70*30)		// a picked up item comes back after this
 #define DMQUICKTICS	70			// dead this long: fire or use comes back
+#ifndef DMENEMYTICS
+#define DMENEMYTICS	(70*60)		// -monsters: a dead enemy is back after 1-2 min
+#endif
 
 typedef struct
 {
@@ -477,6 +481,11 @@ void NetKillPlayer (objtype *attacker)
 		sprintf (str,"%s killed %s",NetName (k),NetName (netcontext));
 		AddChatLine (str,k == localplayer ? 15 : playercolors[k]);
 	}
+	else if (attacker && attacker->obclass != playerobj)
+	{
+		sprintf (str,"%s was killed by the enemy",NetName (netcontext));
+		AddChatLine (str,7);
+	}
 	else
 	{
 		p->frags--;					// no one else to blame
@@ -742,7 +751,62 @@ static	byte	dmspots[MAPSIZE*MAPSIZE][2];
 static	int		numdmspots;
 
 static	int		dmrespawn[MAXSTATS];	// tics until a picked up item is back
-static	short	dmshape[MAXSTATS];		// and what it was
+static	short	dmorig[MAXSTATS];		// the map's item there (-1: a dropped one)
+
+// -monsters: where each of the map's enemies started, and how long until
+// a dead one comes back there
+typedef struct
+{
+	short	tile;
+	byte	x,y;
+	short	ob;					// its object in objlist (alive or a corpse)
+	short	pad;
+	long	timer;				// tics until it's back (0: alive)
+} dmenemy_t;
+
+static	dmenemy_t dmenemies[MAXACTORS];
+static	int		numdmenemies;
+static	FILE	*netlog;			// -netlog: NETLOG.TXT, for chasing desyncs
+
+void NetEnemySpawned (int tile, int x, int y, objtype *ob)
+{
+	dmenemy_t *e;
+
+	if (tile < 0)
+	{
+		numdmenemies = 0;		// a new level
+		return;
+	}
+	if (numdmenemies == MAXACTORS)
+		return;
+	e = &dmenemies[numdmenemies++];
+	e->tile = tile;
+	e->x = x;
+	e->y = y;
+	e->ob = ob-objlist;
+	e->timer = 0;
+}
+
+void NetEnemyKilled (objtype *ob)
+{
+	int i;
+
+	if (!deathmatch || !dmmonsters)
+		return;
+	for (i=0;i<numdmenemies;i++)
+		if (dmenemies[i].ob == ob-objlist && !dmenemies[i].timer)
+		{
+			dmenemies[i].timer = DMENEMYTICS + (long)US_RndT ()*DMENEMYTICS/255;
+			if (netlog)
+				fprintf (netlog,"enemy %d (%d at %d,%d) killed: back in %ld tics\n",
+					i,dmenemies[i].tile,dmenemies[i].x,dmenemies[i].y,dmenemies[i].timer);
+		}
+}
+
+boolean NetStatReserved (int i)
+{
+	return deathmatch && i >= 0 && i < MAXSTATS && dmrespawn[i] > 0;
+}
 
 
 static boolean DMFloor (int x, int y)
@@ -799,6 +863,8 @@ static void DMFindSpots (int sx, int sy)
 		}
 	}
 	memset (dmrespawn,0,sizeof(dmrespawn));
+	for (x=0;x<MAXSTATS;x++)
+		dmorig[x] = x < laststatobj-statobjlist ? statobjlist[x].shapenum : -1;
 }
 
 //
@@ -875,20 +941,53 @@ static void DMPlace (netplayer_t *p)
 }
 
 //
-// DMItems: from RunFrame: the items picked up come back after a while
+// DMItems: from RunFrame: the items picked up come back after a while, and
+// (-monsters) the enemies killed, where they started (the corpse goes)
 //
 static void DMItems (void)
 {
-	int		i,n;
+	int		i,n,p;
+	dmenemy_t *e;
+	objtype	*old,*before;
 
 	n = laststatobj - statobjlist;
 	for (i=0;i<n;i++)
 		if (dmrespawn[i] && (dmrespawn[i] -= tics) <= 0)
 		{
 			dmrespawn[i] = 0;
-			statobjlist[i].shapenum = dmshape[i];
-			statobjlist[i].flags |= FL_BONUS;
+			if (statobjlist[i].shapenum == -1 && dmorig[i] != -1)
+			{
+				statobjlist[i].shapenum = dmorig[i];
+				statobjlist[i].flags |= FL_BONUS;
+			}
 		}
+
+	for (i=0,e=dmenemies;i<numdmenemies;i++,e++)
+	{
+		if (!e->timer || (e->timer -= tics) > 0)
+			continue;
+		e->timer = 0;
+
+		// not on top of anybody: later, then
+		for (p=0;p<numplayers;p++)
+			if (!np[p].dead && np[p].ob->tilex == e->x && np[p].ob->tiley == e->y)
+				break;
+		if (p < numplayers || actorat[e->x][e->y] || tilemap[e->x][e->y])
+		{
+			e->timer = 70*5;
+			continue;
+		}
+
+		old = &objlist[e->ob];
+		if (old->state && old->obclass != playerobj && !(old->flags & FL_SHOOTABLE))
+			RemoveObj (old);
+		before = lastobj;
+		ScanInfoTile (e->tile,e->x,e->y);
+		if (lastobj != before)
+			e->ob = lastobj-objlist;
+		if (netlog)
+			fprintf (netlog,"enemy %d back (objects: %d)\n",i,objcount);
+	}
 }
 
 
@@ -928,13 +1027,9 @@ static void NetPickups (objtype *ob)
 			continue;
 
 		oldkeys = gamestate.keys;
-		i = statptr->shapenum;
 		GetBonus (statptr);
-		if (deathmatch && statptr->shapenum == -1)
-		{
-			dmshape[statptr-statobjlist] = i;
-			dmrespawn[statptr-statobjlist] = DMITEMTICS;
-		}
+		if (deathmatch && statptr->shapenum == -1 && dmorig[statptr-statobjlist] != -1)
+			dmrespawn[statptr-statobjlist] = DMITEMTICS;	// (not what guards drop)
 		if (gamestate.keys != oldkeys)
 		{
 			// keys are for everybody
@@ -1701,7 +1796,7 @@ static int IPXGet (void *buf, byte *from)
 
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop};
 
-#define NETVERSION	3
+#define NETVERSION	4
 
 typedef struct
 {
@@ -1752,6 +1847,8 @@ typedef struct
 	byte	episode,level,skill,players;
 	unsigned long nonce;		// the asker's
 	byte	arbiter[10];		// where to ask to come in (0: the sender)
+	byte	monsters,pad[3];
+	unsigned long build;		// BuildId: a snapshot only fits the same program
 } __attribute__((packed)) infopacket_t;
 
 typedef struct
@@ -1760,6 +1857,7 @@ typedef struct
 	byte	type,version;
 	unsigned long nonce;
 	char	name[NETNAMELEN+1];
+	unsigned long build;
 } __attribute__((packed)) joinpacket_t;
 
 #define SNAPCHUNK	176
@@ -1808,7 +1906,6 @@ static	long	hashframes[NETRING];
 static	long	desyncframe = -1;
 
 static	int		hello_episode,hello_level,hello_skill;
-static	FILE	*netlog;			// -netlog: NETLOG.TXT, for chasing desyncs
 static	unsigned long mynonce;
 static	boolean	inplay;				// in NetPlayLoop: tell the others when we go
 
@@ -2339,20 +2436,22 @@ static objtype *IndexObj (long i)
 	return i < 0 || i >= MAXACTORS ? NULL : &objlist[i];
 }
 
-static long StateIndex (statetype *s)
+//
+// BuildId: the snapshot has the actors' state pointers as they are, which
+// only means the same thing to the same program; this tells two apart
+//
+static unsigned long BuildId (void)
 {
 	extern	statetype s_attack;
-	if (s == &s_attack)
-		return 1;
-	if (s == &s_netdead)
-		return 2;
-	return 0;
-}
+	unsigned long h;
 
-static statetype *IndexState (long i)
-{
-	extern	statetype s_attack;
-	return i == 1 ? &s_attack : i == 2 ? &s_netdead : &s_player;
+	h = sizeof(objtype)*31 + sizeof(netplayer_t)*7 + sizeof(statobj_t)*131 + MAXACTORS + NETVERSION;
+	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_player;
+	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_attack;
+	h = h*2654435761u ^ (unsigned long)(uintptr_t)&s_netdead;
+	h = h*2654435761u ^ (unsigned long)(uintptr_t)objlist;
+	h = h*2654435761u ^ (unsigned long)(uintptr_t)statobjlist;
+	return h;
 }
 
 // PackBits: runs of 3 to 130 of a byte, else literals of 1 to 128
@@ -2462,7 +2561,6 @@ static long WriteGame (byte *buf, int slot)
 		Put (&statobjlist[i].itemnumber,1);
 	}
 	Put (dmrespawn,n*sizeof(dmrespawn[0]));
-	Put (dmshape,n*sizeof(dmshape[0]));
 
 	n = lastdoorobj - doorobjlist;
 	SnapPutLong (n);
@@ -2476,16 +2574,26 @@ static long WriteGame (byte *buf, int slot)
 	SnapPutLong (pwalldir);
 	SnapPutLong (ObjIndex (pwallpusher));
 
+	//
+	// every object (the players, and -monsters' enemies), and the free
+	// list: the links as indexes, the states as they are (BuildId)
+	//
+	SnapPutLong (objcount);
+	SnapPutLong (ObjIndex (lastobj));
+	SnapPutLong (ObjIndex (objfreelist));
+	for (i=0;i<MAXACTORS;i++)
+	{
+		ob = objlist[i];
+		SnapPutLong (ObjIndex (ob.next));
+		SnapPutLong (ObjIndex (ob.prev));
+		ob.next = ob.prev = NULL;
+		Put (&ob,sizeof(ob));
+	}
+	SnapPutLong (numdmenemies);
+	Put (dmenemies,numdmenemies*sizeof(dmenemies[0]));
+
 	for (i=0;i<MAXPLAYERS;i++)
 	{
-		ob = *np[i].ob;
-		v = StateIndex (ob.state);
-		ob.state = NULL;
-		ob.next = ob.prev = NULL;
-		SnapPutLong (ObjIndex (np[i].ob));
-		SnapPutLong (v);
-		Put (&ob,sizeof(ob));
-
 		p = np[i];
 		v = ObjIndex (p.lastattacker);
 		p.ob = NULL;
@@ -2553,7 +2661,6 @@ static boolean ReadGame (byte *buf, long len)
 		statobjlist[i].visspot = &spotvis[statobjlist[i].tilex][statobjlist[i].tiley];
 	}
 	Get (dmrespawn,n*sizeof(dmrespawn[0]));
-	Get (dmshape,n*sizeof(dmshape[0]));
 
 	n = SnapGetLong ();
 	if (n < 0 || n > MAXDOORS)
@@ -2569,18 +2676,25 @@ static boolean ReadGame (byte *buf, long len)
 	pwalldir = SnapGetLong ();
 	pwallpusher = IndexObj (SnapGetLong ());
 
+	objcount = SnapGetLong ();
+	lastobj = IndexObj (SnapGetLong ());
+	objfreelist = IndexObj (SnapGetLong ());
+	for (i=0;i<MAXACTORS;i++)
+	{
+		long nx = SnapGetLong (), pv = SnapGetLong ();
+		Get (&ob,sizeof(ob));
+		ob.next = IndexObj (nx);
+		ob.prev = IndexObj (pv);
+		objlist[i] = ob;
+	}
+	numdmenemies = SnapGetLong ();
+	if (numdmenemies < 0 || numdmenemies > MAXACTORS)
+		return false;
+	Get (dmenemies,numdmenemies*sizeof(dmenemies[0]));
+
 	for (i=0;i<MAXPLAYERS;i++)
 	{
-		o = IndexObj (SnapGetLong ());
-		v = SnapGetLong ();
-		Get (&ob,sizeof(ob));
-		if (!o)
-			return false;
-		ob.state = IndexState (v);
-		ob.next = o->next;			// the list is the same here
-		ob.prev = o->prev;
-		*o = ob;
-
+		o = &objlist[i];
 		v = SnapGetLong ();
 		Get (&p,sizeof(p));
 		p.ob = o;
@@ -2675,6 +2789,8 @@ static void ReplyInfo (byte *from, unsigned long nonce)
 		if (!np[i].removed)
 			pk.players++;
 	pk.nonce = nonce;
+	pk.monsters = dmmonsters;
+	pk.build = BuildId ();
 	arb = Arbiter ();
 	if (arb != localplayer)
 		memcpy (pk.arbiter,np[arb].addr,10);
@@ -2698,6 +2814,16 @@ static void ReceiveJoin (joinpacket_t *jp, byte *from)
 	}
 	if (pending.active)
 		return;						// one at a time: it'll ask again
+
+	if (jp->build != BuildId ())
+	{
+		byte pk[8];
+		memset (pk,0,sizeof(pk));
+		pk[0] = 'W'; pk[1] = '3'; pk[2] = pk_full; pk[3] = 1;	// 1: not the same program
+		memcpy (pk+4,&jp->nonce,4);
+		IPXSend (0,from,pk,sizeof(pk));
+		return;
+	}
 
 	for (i=0;i<numplayers;i++)		// it's here already
 		if (!np[i].removed && !memcmp (np[i].addr,from,10) && i != localplayer)
@@ -3011,6 +3137,7 @@ static void NetStartupDM (void)
 
 	host = Parm ("-host");
 	join = Parm ("-join");
+	dmmonsters = Parm ("-monsters");	// (the game's choice, if we join one)
 	if (!host)
 	{
 		printf (join ? "Looking for a deathmatch game (Esc aborts)...\n"
@@ -3034,9 +3161,16 @@ static void NetStartupDM (void)
 				if (buf[0] != 'W' || buf[1] != '3' || buf[2] != pk_info
 				|| ip->version != NETVERSION || ip->nonce != mynonce)
 					continue;
+				if (ip->build != BuildId ())
+				{
+					printf ("There's a deathmatch game, but it's another build of the game\n"
+						"(everyone needs the same %s).\n",_argv[0]);
+					exit (1);
+				}
 				hello_episode = ip->episode;
 				hello_level = ip->level;
 				hello_skill = ip->skill;
+				dmmonsters = ip->monsters;
 				for (i=0;i<10 && !ip->arbiter[i];i++)
 					;
 				memcpy (arbaddr,i == 10 ? from : ip->arbiter,10);
@@ -3060,8 +3194,8 @@ static void NetStartupDM (void)
 
 	if (dmjoining)
 	{
-		printf ("Found a game: episode %d, level %d, skill %d, %d playing. Joining...\n",
-			hello_episode+1,hello_level+1,hello_skill,ip->players);
+		printf ("Found a game: episode %d, level %d, skill %d%s, %d playing. Joining...\n",
+			hello_episode+1,hello_level+1,hello_skill,dmmonsters ? ", enemies" : "",ip->players);
 		localplayer = 0;				// till we're told
 		return;
 	}
@@ -3070,9 +3204,10 @@ static void NetStartupDM (void)
 	np[0].gone = np[0].removed = np[0].dead = false;
 	np[0].lastframe = 0x7fffffffl;
 	strcpy (np[0].name,myname);
-	printf ("Started a deathmatch game: episode %d, level %d, skill %d.\n"
+	printf ("Started a deathmatch game: episode %d, level %d, skill %d%s.\n"
 		"Others can join it any time (wolf3d -deathmatch).\n",
-		hello_episode+1,hello_level+1,hello_skill);
+		hello_episode+1,hello_level+1,hello_skill,
+		dmmonsters ? ", with the enemies (back 1-2 minutes after they die)" : "");
 }
 
 /*
@@ -3932,6 +4067,7 @@ static void JoinGame (void)
 	jp.version = NETVERSION;
 	jp.nonce = mynonce;
 	strcpy (jp.name,myname);
+	jp.build = BuildId ();
 
 	total = -1;
 	have = 0;
@@ -3949,7 +4085,8 @@ static void JoinGame (void)
 			if (buf[0] != 'W' || buf[1] != '3')
 				continue;
 			if (buf[2] == pk_full && !memcmp (buf+4,&mynonce,4))
-				Quit ("That deathmatch game is full");
+				Quit (buf[3] == 1 ? "That deathmatch game is another build of the game"
+					: "That deathmatch game is full");
 			if (buf[2] != pk_snap || sk->nonce != mynonce
 			|| sk->total == 0 || sk->total > SNAPMAX/SNAPCHUNK || sk->chunk >= sk->total
 			|| sk->len > SNAPCHUNK || (total != -1 && sk->total != total))
