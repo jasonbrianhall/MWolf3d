@@ -35,6 +35,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
 #define stricmp		strcasecmp
 #define strnicmp	strncasecmp
 static FILE *CaseFopen (const char *name, const char *mode);
@@ -444,6 +445,11 @@ static void TermSignal (int sig)
 	raise (sig);
 }
 
+static void Winch (int sig)
+{
+	// nothing: the wait for a key ends, and Refresh sees the new size
+}
+
 static void TermOn (void)
 {
 	struct termios t;
@@ -467,23 +473,47 @@ static void TermOn (void)
 	signal (SIGTERM,TermSignal);
 	signal (SIGHUP,TermSignal);
 	signal (SIGSEGV,TermSignal);
+	signal (SIGWINCH,Winch);
 	printf ("\033[?1049h\033[?25l\033[2J");
 	memset (shown,0xff,sizeof(shown));		// all of it, the first time
 }
 
+/*
+ * The 80x25 screen goes in the middle of a bigger terminal; every row is
+ * started with a cursor move (a wide terminal doesn't wrap after column
+ * 80), and a terminal that changed size is drawn again from scratch
+ */
 static void Refresh (void)
 {
 	static const int ansi[8] = {0,4,2,6,1,5,3,7};
-	int		i,ch,a,last = -1,at = -1;
+	static int	oldcols,oldrows;
+	struct winsize ws;
+	int		i,ch,a,last = -1,at = -1,cols = 80,rows = 25,ox,oy;
 
 	TermOn ();
+	if (!ioctl (1,TIOCGWINSZ,&ws) && ws.ws_col && ws.ws_row)
+	{
+		cols = ws.ws_col;
+		rows = ws.ws_row;
+	}
+	if (cols != oldcols || rows != oldrows)
+	{
+		printf ("\033[0m\033[2J");
+		memset (shown,0xff,sizeof(shown));
+		oldcols = cols;
+		oldrows = rows;
+	}
+	ox = cols > 80 ? (cols-80)/2 : 0;
+	oy = rows > 25 ? (rows-25)/2 : 0;
 	for (i=0;i<25*80;i++)
 	{
 		if (screen[i] == shown[i])
 			continue;
 		shown[i] = screen[i];
-		if (at != i)
-			printf ("\033[%d;%dH",i/80+1,i%80+1);
+		if (i%80 >= cols || i/80 >= rows)
+			continue;				// (a terminal smaller than 80x25)
+		if (at != i || i%80 == 0)
+			printf ("\033[%d;%dH",oy+i/80+1,ox+i%80+1);
 		a = screen[i] >> 8;
 		if (a != last)
 		{
