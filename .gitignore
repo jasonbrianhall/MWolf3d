@@ -1,0 +1,7 @@
+linux/build/
+linux/wolf3d
+linux/spear
+msdos/build/
+msdos/csdpmi/
+msdos/csdpmi7b.zip
+msdos/*.exe

@@ -154,7 +154,7 @@ fixed FixedByFrac (fixed a, fixed b)
 //
 // multiply the unsigned value by the 16 bit fraction, keep 32 bits
 //
-	result = (unsigned long)(((unsigned long long)ua * (b & 0xffff)) >> 16);
+	result = (unsigned long)(((uint64_t)ua * (b & 0xffff)) >> 16);
 
 	if (negative)
 		result = -result;
@@ -1295,11 +1295,11 @@ static long partialbystep (long step, word partial)
 	if (step < 0)
 	{
 		mag = -(unsigned long)step;
-		result = (unsigned long)(((unsigned long long)mag * partial) >> 16);
+		result = (unsigned long)(((uint64_t)mag * partial) >> 16);
 		return -(long)result;
 	}
 	mag = step;
-	return (long)(((unsigned long long)mag * partial) >> 16);
+	return (long)(((uint64_t)mag * partial) >> 16);
 }
 
 #define DEG90	900

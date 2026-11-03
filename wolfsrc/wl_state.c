@@ -153,7 +153,7 @@ void NewState (objtype *ob, statetype *state)
 
 #define CHECKDIAG(x,y)								\
 {                                                   \
-	temp=(unsigned)actorat[x][y];                   \
+	temp=(uintptr_t)actorat[x][y];                   \
 	if (temp)                                       \
 	{                                               \
 		if (temp<256)                               \
@@ -165,7 +165,7 @@ void NewState (objtype *ob, statetype *state)
 
 #define CHECKSIDE(x,y)								\
 {                                                   \
-	temp=(unsigned)actorat[x][y];                   \
+	temp=(uintptr_t)actorat[x][y];                   \
 	if (temp)                                       \
 	{                                               \
 		if (temp<128)                               \
@@ -181,7 +181,7 @@ void NewState (objtype *ob, statetype *state)
 boolean TryWalk (objtype *ob)
 {
 	int			doornum;
-	unsigned	temp;
+	uintptr_t	temp;			// (a pointer, or a tile number)
 
 	doornum = -1;
 

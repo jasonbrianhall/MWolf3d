@@ -19,6 +19,11 @@
 
 #include "id_heads.h"
 #pragma	hdrstop
+#ifdef __linux__
+#undef Keyboard				// this is where they live (and then the
+#undef LastScan				// loops here read them through SYS_Poll
+#undef LastASCII			// too, below)
+#endif
 
 #define	KeyInt		9	// The keyboard ISR number
 
@@ -75,6 +80,11 @@ volatile	boolean		Keyboard[NumCodes];
 volatile	boolean		Paused;
 volatile	char		LastASCII;
 volatile	ScanCode	LastScan;
+#ifdef __linux__
+#define Keyboard	((volatile boolean *)SYS_Keyboard())
+#define LastScan	(*SYS_LastScan())
+#define LastASCII	(*SYS_LastASCII())
+#endif
 
 		KeyboardDef	KbdDefs = {0x1d,0x38,0x47,0x48,0x49,0x4b,0x4d,0x4f,0x50,0x51};
 		JoystickDef	JoyDefs[MaxJoys];
@@ -418,7 +428,7 @@ INL_StartKbd(void)
 	IN_ClearKeysDown();
 
 	_go32_dpmi_get_protected_mode_interrupt_vector(KeyInt,&OldKeyVect);
-	NewKeyVect.pm_offset = (unsigned long)INL_KeyService;
+	NewKeyVect.pm_offset = (uintptr_t)INL_KeyService;
 	NewKeyVect.pm_selector = _go32_my_cs();
 	if (_go32_dpmi_allocate_iret_wrapper(&NewKeyVect))
 		Quit("INL_StartKbd: Can't hook the keyboard interrupt");
@@ -585,6 +595,9 @@ IN_Startup(void)
 		return;
 
 	checkjoys = true;
+#ifdef __linux__
+	checkjoys = false;
+#endif
 	checkmouse = true;
 	for (i = 1;i < _argc;i++)
 	{

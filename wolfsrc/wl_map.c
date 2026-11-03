@@ -251,7 +251,7 @@ void AM_Draw (void)
 	//
 	// the players
 	//
-	if (netgame)
+	if (netgame && !deathmatch)		// deathmatch: that would be telling
 	{
 		for (i=0;i<numplayers;i++)
 			if (playerobjs[i] != player && NetPlayerAlive (i))

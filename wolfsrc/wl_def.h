@@ -728,7 +728,7 @@ typedef	struct
 
 	int			episode,secretcount,treasurecount,killcount,
 				secrettotal,treasuretotal,killtotal;
-	long		TimeCount;
+	long		playtime;			// was TimeCount (now a macro on Linux)
 	long		killx,killy;
 	boolean		victoryflag;		// set during victory animations
 } gametype;
@@ -1164,6 +1164,7 @@ extern unsigned	pwallstate;
 extern unsigned	pwallpos;			// amount a pushable wall has been moved (0-63)
 extern unsigned	pwallx,pwally;
 extern int			pwalldir;
+extern objtype		*pwallpusher;
 
 
 void InitDoorList (void);

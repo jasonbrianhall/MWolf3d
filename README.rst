@@ -1,6 +1,9 @@
 Wolfenstein 3D
 ==============
 
+MS-DOS (DJGPP) and Linux (SDL2) ports, with network co-op and
+deathmatch.
+
 MS-DOS port (DJGPP)
 -------------------
 
@@ -58,6 +61,27 @@ T starts a chat message (Enter sends, Esc drops it); while typing,
 Alt+1 to Alt+0 send the chat macros, which SETUP edits
 (``CHATMACS.CFG``).
 
+Deathmatch, over IPX like co-op (2 to 4 players)::
+
+  wolf3d -deathmatch -name Hans [-episode 1] [-level 1] [-skill 2]
+
+No waiting for anyone: the first one to run it starts the game (with
+its episode, level and skill), and everyone after that joins it whenever
+they like, and leaves (Esc) whenever they like; a newcomer takes a free
+slot and gets the game as it is right then. ``-host`` always starts a new
+game, ``-join`` waits for one instead of starting it. There are no
+enemies, no treasure, keys or extra lives on the map; everybody starts
+(and comes back) with every weapon, both keys and 50 rounds, somewhere
+at random, and the ammo, food and first aid kits that are picked up come
+back after 30 seconds. The exit is shut. The SCORE on the status bar is
+your frags (one for a kill, one off if you die without anyone to thank);
+Tab's automap also shows everybody's frags and deaths, and so does the
+screen while you're dead. Fire or use brings you back after a second,
+or wait three. A player whose machine goes quiet (crashed, unplugged) is
+dropped after 8 seconds and the rest play on. Names (``-name``, or NAME.CFG, which IPXSETUP writes) are
+in the chat, the kills and the score table, in co-op too. IPXSETUP's
+network screen has a Co-op / Deathmatch choice and the name.
+
 ``-widescreen`` (or Widescreen in SETUP's Display screen) is for 16:9
 monitors: the game draws its pages in main memory instead of planar VGA
 memory and shows them in a 16:9 (or 16:10) VESA mode, 8 bit or 15/16/24/32
@@ -114,6 +138,44 @@ crawl. ``wolf3d -timing`` writes how long each startup step took to
 Needs a 386 with a 387 (or a 486DX or later; else put ``EMU387.DXE``
 next to it) and 4 MB of RAM. Runs in plain DOS, FreeDOS, Windows 9x and
 DOSBox, not in Windows NT/XP's DOS box.
+
+Linux (SDL2)
+------------
+
+The same source builds for Linux: ``wolfsrc/sys_linux.c`` stands in for
+the PC. The game still programs the timer chip and hooks the timer and
+keyboard interrupts, calls the mouse driver, writes AdLib registers and
+draws into the pages in memory (as in the widescreen mode); that file
+calls its timer handler from a thread at the rate it set, feeds its
+keyboard handler PC scan codes from SDL's key events, answers INT 33h
+from SDL's mouse, plays the music and AdLib sounds on an OPL2 in software
+(DOSBox's dbopl, as for the Gravis UltraSound), mixes in the digitized
+sounds (in stereo) and the PC speaker, shows the page in a window, and
+sends the network packets over UDP instead of IPX. Needs a C/C++ compiler
+and SDL2 (Debian/Ubuntu: ``sudo apt install build-essential libsdl2-dev``)::
+
+  cd linux
+  make                    # ./wolf3d for the .WL6 data
+  make VERSION=wl1        # (the same VERSIONs as for DOS: wl6 wl6apo wl1 sod sdm)
+  ./wolf3d -data ~/wolf3d # or run it in the directory with the data
+
+The data files can be in upper or lower case. ``-fullscreen`` (or
+Alt+Enter), ``-widescreen`` (a 16:9 view), ``-smooth`` (no square
+pixels), ``-nosound``; ``./wolf3d --help`` lists the rest. A click in the
+window takes the mouse for turning (it's let go when the window loses
+the focus). CONFIG and the saved games are the DOS version's formats for
+the settings, but saved games only load in the build that made them.
+
+Network games go over UDP port 27135 to the local network (``-port N``
+for another). For a game somewhere else, ``-connect host[:port]``; for
+co-op with ``-connect``, the others it finds are passed along::
+
+  ./wolf3d -deathmatch -name Hans                     # start or join one
+  ./wolf3d -deathmatch -connect 192.168.1.20 -name Fritz
+  ./wolf3d -nodes 2 -connect example.org:27135        # co-op
+
+Linux and DOS players can't play together (UDP isn't IPX, and the two
+builds must do exactly the same arithmetic). No joysticks yet.
 
 The original source release was made using the ``DEICE.EXE``
 installer (DeIce) in the root directory.  (Basically a way to

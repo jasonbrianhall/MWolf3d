@@ -615,12 +615,12 @@ void LevelCompleted (void)
 	 //
 	 // PRINT TIME
 	 //
-	 sec=gamestate.TimeCount/70;
+	 sec=gamestate.playtime/70;
 
 	 if (sec > 99*60)		// 99 minutes max
 	   sec = 99*60;
 
-	 if (gamestate.TimeCount<parTimes[gamestate.episode*10+mapon].time*4200)
+	 if (gamestate.playtime<parTimes[gamestate.episode*10+mapon].time*4200)
 		timeleft=(parTimes[gamestate.episode*10+mapon].time*4200)/70-sec;
 
 	 min=sec/60;

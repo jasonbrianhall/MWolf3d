@@ -163,6 +163,12 @@ extern	volatile boolean	Keyboard[];
 extern	volatile boolean	Paused;
 extern	volatile char		LastASCII;
 extern	volatile ScanCode	LastScan;
+#ifdef __linux__
+// read through functions that keep SDL's events coming (sys_linux.h)
+#define Keyboard	((volatile boolean *)SYS_Keyboard())
+#define LastScan	(*SYS_LastScan())
+#define LastASCII	(*SYS_LastASCII())
+#endif
 
 extern	boolean		MousePresent,
 					JoysPresent[];

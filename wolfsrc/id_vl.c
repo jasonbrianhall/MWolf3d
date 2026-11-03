@@ -169,9 +169,16 @@ static boolean VL_WantWidescreen (void)
 
 void	VL_SetVGAPlaneMode (void)
 {
+#ifdef __linux__
+	// always the pages in memory, shown by SDL: 320 wide (4:3) or wider
+	if (!vlinear)
+	{
+		int	width = VESA_Start (VL_WantWidescreen () ? widew : -1,wideh);
+#else
 	if (!vlinear && VL_WantWidescreen ())
 	{
 		int	width = VESA_Start (widew,wideh);
+#endif
 
 		if (width)
 		{
@@ -400,6 +407,10 @@ void VL_WaitVBL (int vbls)
 	if (vlinear)
 	{
 		VL_PresentDirty ();
+#ifdef __linux__
+		SYS_WaitVBL (vbls);
+		return;
+#endif
 		while (vbls-- > 0)		// a VESA card may not have the VGA's retrace bit
 		{
 			for (n=0 ; n<20000 && (inportb (STATUS_REGISTER_1) & 8) ; n++)
