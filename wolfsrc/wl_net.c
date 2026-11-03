@@ -964,40 +964,80 @@ static void DMFindSpots (int sx, int sy)
 }
 
 //
-// DMSpawn: a random spot, the one of a few tries furthest from the others
+// DMSpawn: a random spot anywhere on the map that nobody is standing on
+// (or near): random tries first, then if the map is crowded, the spot
+// furthest from everyone
 //
+#define DMSPAWNTRIES	32
+#define DMSPAWNFAR		(4l<<TILESHIFT)		// a random try this far away will do
+
+static long DMNearest (netplayer_t *p, int x, int y)
+{
+	int		i;
+	long	dx,dy,d,nearest;
+
+	nearest = 0x7fffffffl;
+	for (i=0;i<numplayers;i++)
+	{
+		if (&np[i] == p || np[i].removed || !np[i].ob)
+			continue;
+		dx = labs (((long)x<<TILESHIFT)+TILEGLOBAL/2 - np[i].ob->x);
+		dy = labs (((long)y<<TILESHIFT)+TILEGLOBAL/2 - np[i].ob->y);
+		d = dx > dy ? dx : dy;
+		if (d < nearest)
+			nearest = d;
+	}
+	return nearest;
+}
+
 static void DMSpawn (netplayer_t *p)
 {
-	int		try,i,s,best,x,y;
-	long	d,nearest,bestd;
+	int		try,i,s,best,x,y,start;
+	long	nearest,bestd;
 
 	if (!numdmspots)
 		return;					// (the map's start, as set already)
-	best = 0;
+	best = -1;
 	bestd = -1;
-	for (try=0;try<6;try++)
+	for (try=0;try<DMSPAWNTRIES;try++)
 	{
 		s = ((US_RndT() << 8) | US_RndT()) % numdmspots;
 		x = dmspots[s][0];
 		y = dmspots[s][1];
 		if (actorat[x][y] || tilemap[x][y])
-			continue;			// a door that closed on it, a pushwall...
-		nearest = 0x7fffffffl;
-		for (i=0;i<numplayers;i++)
-		{
-			if (&np[i] == p || np[i].dead || !np[i].ob)
-				continue;
-			d = labs (((long)x<<TILESHIFT)+TILEGLOBAL/2 - np[i].ob->x)
-				+ labs (((long)y<<TILESHIFT)+TILEGLOBAL/2 - np[i].ob->y);
-			if (d < nearest)
-				nearest = d;
-		}
+			continue;			// a door that closed on it, a pushwall, an enemy...
+		nearest = DMNearest (p,x,y);
 		if (nearest > bestd)
 		{
 			bestd = nearest;
 			best = s;
 		}
+		if (nearest >= DMSPAWNFAR)
+			break;
 	}
+	if (bestd < DMSPAWNFAR)
+	{
+		// crowded: look at every spot
+		start = ((US_RndT() << 8) | US_RndT()) % numdmspots;
+		for (i=0;i<numdmspots;i++)
+		{
+			s = (start+i) % numdmspots;
+			x = dmspots[s][0];
+			y = dmspots[s][1];
+			if (actorat[x][y] || tilemap[x][y])
+				continue;
+			nearest = DMNearest (p,x,y);
+			if (nearest > bestd)
+			{
+				bestd = nearest;
+				best = s;
+				if (nearest >= DMSPAWNFAR)
+					break;
+			}
+		}
+	}
+	if (best < 0)
+		best = 0;				// nowhere at all: the map's start
 	p->spawnx = ((long)dmspots[best][0]<<TILESHIFT)+TILEGLOBAL/2;
 	p->spawny = ((long)dmspots[best][1]<<TILESHIFT)+TILEGLOBAL/2;
 	p->spawnangle = (US_RndT() & 3) * 90;
