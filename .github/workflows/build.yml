@@ -240,6 +240,10 @@ jobs:
                      your frags, Tab shows everybody's.
           Network:   UDP port 27135 on the local network; -port N for
                      another, -connect host[:port] for a game elsewhere.
+                     Or TCP through a server (for the internet):
+                     ./wolf3d -tcpserver [port] on one, ./wolf3d -tcp
+                     host[:port] on the others. P shows or hides the
+                     ping times.
           With DOS:  DOS players in DOSBox use IPX through DOSBox's IPXNET:
                      ./wolf3d -ipxnet host:port joins an IPXNET server
                      (IPXNET STARTSERVER port in DOSBox), ./wolf3d

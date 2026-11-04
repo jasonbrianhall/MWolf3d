@@ -339,7 +339,7 @@ static int		net_monsters;					// deathmatch: the enemies too
 static int		net_timelimit = 30;				// deathmatch: minutes a level (0: no limit)
 static char		net_name[MACROLEN+1],oldname[MACROLEN+1];
 static char		net_connect[MACROLEN+1];		// Linux: -connect (host[:port])
-static int		net_ipx;						// Linux: 0 UDP, 1 -ipxnet, 2 -ipxserver
+static int		net_ipx;						// Linux: 0 UDP, 1 -ipxnet, 2 -ipxserver, 3 -tcp, 4 -tcpserver
 
 #define NUMTIMES	9
 static const char *timenames[NUMTIMES] =
@@ -375,7 +375,7 @@ static void LoadNet (void)
 	fscanf (f,"%d %d %d %d %d %d",&net_nodes,&net_episode,&net_level,&net_skill,&net_ff,&net_dm);
 	if (fscanf (f," monsters=%d",&net_monsters) != 1)
 		net_monsters = 0;
-	if (fscanf (f," ipx=%d",&net_ipx) != 1 || net_ipx < 0 || net_ipx > 2)
+	if (fscanf (f," ipx=%d",&net_ipx) != 1 || net_ipx < 0 || net_ipx > 4)
 		net_ipx = 0;
 	if (fscanf (f," connect=%60s",net_connect) != 1)
 		net_connect[0] = 0;
@@ -1369,7 +1369,8 @@ static void RunGame (const char *const *args)
 static const char *gamenames[] = {"Co-op","Deathmatch"};
 #ifdef __linux__
 static const char *netnames[] =
-	{"UDP (Linux players)","IPX: join DOSBox's IPXNET","IPX: be the IPXNET server"};
+	{"UDP (Linux players)","IPX: join DOSBox's IPXNET","IPX: be the IPXNET server",
+	 "TCP: connect to a server","TCP: be the server"};
 #endif
 
 static void NetworkScreen (int standalone)
@@ -1391,7 +1392,7 @@ static void NetworkScreen (int standalone)
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
 #ifdef __linux__
-		{F_CHOICE,"Network",0,0,2,netnames,0,&net_ipx},
+		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
 #endif
 		{F_TEXT,""},
@@ -1446,7 +1447,14 @@ static void NetworkScreen (int standalone)
 		if (!net_ff && !net_dm)
 			args[n++] = "-nofriendlyfire";
 #ifdef __linux__
-		if (net_ipx == 2)
+		if (net_ipx == 4)
+			args[n++] = "-tcpserver";
+		else if (net_ipx == 3)
+		{
+			args[n++] = "-tcp";
+			args[n++] = net_connect[0] ? net_connect : "localhost";
+		}
+		else if (net_ipx == 2)
 			args[n++] = "-ipxserver";
 		else if (net_ipx == 1)
 		{

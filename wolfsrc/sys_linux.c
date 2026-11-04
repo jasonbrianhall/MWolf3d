@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <ifaddrs.h>
@@ -860,6 +861,11 @@ void SYS_Poll (void)
 		}
 	}
 	inpoll = 0;
+}
+
+uint32_t SYS_Millis (void)
+{
+	return SDL_GetTicks ();
 }
 
 volatile uint32_t *SYS_TimeCount (void)
@@ -2023,4 +2029,426 @@ int SYS_IpxGet (void *buf, int max, unsigned char *from)
 void SYS_IpxMyAddr (unsigned char *addr)
 {
 	memcpy (addr,ipxmyaddr,10);
+}
+
+
+/*
+=============================================================================
+
+						TCP (IPX packets over TCP, through a server)
+
+ For a game over the internet where UDP doesn't get through (a firewall,
+ or a router that forwards one port to one machine): IPXNET's packets
+ (header, then the data), each with a 2 byte length (big endian) in front,
+ over a TCP connection to a server, which passes them on by destination
+ as the IPXNET server does. -tcpserver [port] is the server, as well as a
+ node; -tcp host[:port] connects to one. The server tells each connection
+ its address (the IP address and port it came from, as the node) in the
+ first packet, as IPXNET's server answers a registration.
+
+ A packet that won't fit in a connection's send buffer (the other end
+ isn't reading) is dropped, as a network would: the game sends its
+ controls again anyway.
+
+=============================================================================
+*/
+
+#define TCPPORT		27135
+#define TCPMAXPKT	(IPXHDR+600)
+#define TCPOUTBUF	32768
+
+typedef struct
+{
+	int		fd;
+	struct sockaddr_in sa;			// where it connected from (its node)
+	unsigned char in[2*(2+TCPMAXPKT)];
+	int		inlen;
+	unsigned char out[TCPOUTBUF];
+	int		outlen;
+} tcpconn_t;
+
+static	int		tcplisten = -1;
+static	int		tcpserving;
+static	tcpconn_t tcpconns[MAXIPXNODES];	// the server's: who's connected
+static	int		numtcpconns;
+static	tcpconn_t tcpserverconn = {-1};	// a client's: to the server
+static	unsigned char tcpmyaddr[10];
+
+static void TcpSetup (int fd)
+{
+	int one = 1;
+
+	fcntl (fd,F_SETFL,fcntl (fd,F_GETFL) | O_NONBLOCK);
+	setsockopt (fd,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one));	// no batching up
+}
+
+//
+// TcpFlush: send what's waiting; 0: the connection's gone
+//
+static int TcpFlush (tcpconn_t *c)
+{
+	int n;
+
+	if (c->fd < 0)
+		return 0;
+	while (c->outlen)
+	{
+		n = send (c->fd,c->out,c->outlen,MSG_NOSIGNAL);
+		if (n > 0)
+		{
+			memmove (c->out,c->out+n,c->outlen-n);
+			c->outlen -= n;
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+			return 1;
+		return 0;
+	}
+	return 1;
+}
+
+static void TcpQueue (tcpconn_t *c, const unsigned char *pkt, int len)
+{
+	if (c->fd < 0 || c->outlen+2+len > TCPOUTBUF)
+		return;							// backed up: lost
+	c->out[c->outlen++] = len >> 8;
+	c->out[c->outlen++] = len;
+	memcpy (c->out+c->outlen,pkt,len);
+	c->outlen += len;
+	TcpFlush (c);						// (a dead one is found reading)
+}
+
+//
+// TcpFrame: the next whole packet from c: its length, 0 none yet, -1 the
+// connection's closed (or sent nonsense)
+//
+static int TcpFrame (tcpconn_t *c, unsigned char *pkt)
+{
+	int n,len;
+
+	if (c->fd < 0)
+		return -1;
+	for (;;)
+	{
+		if (c->inlen >= 2)
+		{
+			len = (c->in[0] << 8) | c->in[1];
+			if (len < IPXHDR || len > TCPMAXPKT)
+				return -1;
+			if (c->inlen >= 2+len)
+			{
+				memcpy (pkt,c->in+2,len);
+				memmove (c->in,c->in+2+len,c->inlen-2-len);
+				c->inlen -= 2+len;
+				return len;
+			}
+		}
+		n = recv (c->fd,c->in+c->inlen,sizeof(c->in)-c->inlen,0);
+		if (n > 0)
+		{
+			c->inlen += n;
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+			return 0;
+		return -1;
+	}
+}
+
+static void TcpAccept (void)
+{
+	struct sockaddr_in sa;
+	socklen_t	salen;
+	unsigned char	h[IPXHDR],node[10],me[10];
+	tcpconn_t	*c;
+	int		fd;
+
+	for (;;)
+	{
+		salen = sizeof(sa);
+		fd = accept (tcplisten,(struct sockaddr *)&sa,&salen);
+		if (fd < 0)
+			return;
+		if (numtcpconns == MAXIPXNODES || sa.sin_family != AF_INET)
+		{
+			close (fd);
+			continue;
+		}
+		TcpSetup (fd);
+		c = &tcpconns[numtcpconns++];
+		memset (c,0,sizeof(*c));
+		c->fd = fd;
+		c->sa = sa;
+		fprintf (stderr,"TCP server: %s:%d connected\n",inet_ntoa (sa.sin_addr),ntohs (sa.sin_port));
+
+		// its address, as IPXNET's server answers a registration
+		NodeOf (&sa,node);
+		memcpy (me,tcpmyaddr,10);
+		me[3] = 1;
+		IpxHeader (h,IPXHDR,node,2,me,2);
+		TcpQueue (c,h,IPXHDR);
+	}
+}
+
+static void TcpDrop (int i)
+{
+	tcpconn_t *c = &tcpconns[i];
+
+	fprintf (stderr,"TCP server: %s:%d disconnected\n",inet_ntoa (c->sa.sin_addr),ntohs (c->sa.sin_port));
+	if (c->fd >= 0)
+		close (c->fd);
+	numtcpconns--;
+	if (i != numtcpconns)
+		memcpy (c,&tcpconns[numtcpconns],sizeof(*c));
+}
+
+//
+// TcpRelay: the server passes a packet on (from: the connection it came
+// from, or NULL for our own)
+//
+static void TcpRelay (const unsigned char *pkt, int len, const tcpconn_t *from)
+{
+	const unsigned char *dest = pkt+6;
+	unsigned char	node[10];
+	int		i;
+
+	for (i=0;i<numtcpconns;i++)
+	{
+		if (&tcpconns[i] == from)
+			continue;					// not back to the sender
+		NodeOf (&tcpconns[i].sa,node);
+		if (IsBroadcast (dest) || !memcmp (dest+4,node+4,6))
+			TcpQueue (&tcpconns[i],pkt,len);
+	}
+	if (from && (IsBroadcast (dest) || !memcmp (dest+4,tcpmyaddr+4,6)))
+		Keep (pkt,len);
+}
+
+int SYS_TcpStartup (const char *server, int serve)
+{
+	struct sockaddr_in sa;
+	unsigned char	buf[TCPMAXPKT];
+	char	host[256],*colon;
+	struct addrinfo hints,*res;
+	int		port,n,fd,err,one = 1;
+	socklen_t	errlen;
+	fd_set	fds;
+	struct timeval tv;
+	Uint32	start;
+
+	if (serve)
+	{
+		tcplisten = socket (AF_INET,SOCK_STREAM,0);
+		if (tcplisten < 0)
+			return 0;
+		setsockopt (tcplisten,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
+		memset (&sa,0,sizeof(sa));
+		sa.sin_family = AF_INET;
+		sa.sin_addr.s_addr = htonl (INADDR_ANY);
+		sa.sin_port = htons (serve);
+		if (bind (tcplisten,(struct sockaddr *)&sa,sizeof(sa)) || listen (tcplisten,8))
+		{
+			fprintf (stderr,"TCP port %d: %s\n",serve,strerror (errno));
+			close (tcplisten);
+			tcplisten = -1;
+			return 0;
+		}
+		fcntl (tcplisten,F_SETFL,fcntl (tcplisten,F_GETFL) | O_NONBLOCK);
+
+		// our own node: a made up address no real one has (127.0.0.2)
+		tcpserving = 1;
+		memset (tcpmyaddr,0,10);
+		tcpmyaddr[4] = 127; tcpmyaddr[7] = 2;
+		tcpmyaddr[8] = serve >> 8;
+		tcpmyaddr[9] = serve;
+		printf ("TCP server on port %d (the others: -tcp <this machine>%s)\n",serve,
+			serve == TCPPORT ? "" : ":<port>");
+		return 1;
+	}
+
+	// a client: connect, and wait for our address
+	strncpy (host,server,sizeof(host)-1);
+	host[sizeof(host)-1] = 0;
+	port = TCPPORT;
+	colon = strrchr (host,':');
+	if (colon)
+	{
+		*colon = 0;
+		port = atoi (colon+1);
+	}
+	memset (&hints,0,sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	if (getaddrinfo (host,NULL,&hints,&res) || !res)
+	{
+		fprintf (stderr,"TCP: can't find %s\n",host);
+		return 0;
+	}
+	memcpy (&sa,res->ai_addr,sizeof(sa));
+	freeaddrinfo (res);
+	sa.sin_port = htons (port);
+
+	fd = socket (AF_INET,SOCK_STREAM,0);
+	if (fd < 0)
+		return 0;
+	TcpSetup (fd);
+	if (connect (fd,(struct sockaddr *)&sa,sizeof(sa)) && errno != EINPROGRESS)
+	{
+		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,strerror (errno));
+		close (fd);
+		return 0;
+	}
+	FD_ZERO (&fds);
+	FD_SET (fd,&fds);
+	tv.tv_sec = 10;
+	tv.tv_usec = 0;
+	err = ETIMEDOUT;
+	errlen = sizeof(err);
+	if (select (fd+1,NULL,&fds,NULL,&tv) > 0)
+		getsockopt (fd,SOL_SOCKET,SO_ERROR,&err,&errlen);
+	if (err)
+	{
+		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,strerror (err));
+		close (fd);
+		return 0;
+	}
+
+	memset (&tcpserverconn,0,sizeof(tcpserverconn));
+	tcpserverconn.fd = fd;
+	tcpserverconn.sa = sa;
+	start = SDL_GetTicks ();
+	while (SDL_GetTicks () - start < 10000)
+	{
+		n = TcpFrame (&tcpserverconn,buf);
+		if (n < 0)
+			break;
+		if (n >= IPXHDR && buf[16] == 0 && buf[17] == 2)
+		{
+			memcpy (tcpmyaddr,buf+6,10);	// what the server calls us
+			return 1;
+		}
+		if (!n)
+		{
+			FD_ZERO (&fds);
+			FD_SET (fd,&fds);
+			tv.tv_sec = 0;
+			tv.tv_usec = 100000;
+			select (fd+1,&fds,NULL,NULL,&tv);
+		}
+	}
+	fprintf (stderr,"TCP: no answer from the game's server at %s:%d (is it -tcpserver?)\n",host,port);
+	close (fd);
+	tcpserverconn.fd = -1;
+	return 0;
+}
+
+void SYS_TcpShutdown (void)
+{
+	Uint32	start = SDL_GetTicks ();
+	int		i,waiting;
+
+	// what's still to go (the goodbyes) gets a moment
+	do
+	{
+		waiting = 0;
+		if (tcpserverconn.fd >= 0 && tcpserverconn.outlen && TcpFlush (&tcpserverconn))
+			waiting = 1;
+		for (i=0;i<numtcpconns;i++)
+			if (tcpconns[i].outlen && TcpFlush (&tcpconns[i]))
+				waiting = 1;
+		if (waiting)
+			SDL_Delay (5);
+	} while (waiting && SDL_GetTicks () - start < 500);
+
+	if (tcpserverconn.fd >= 0)
+		close (tcpserverconn.fd);
+	tcpserverconn.fd = -1;
+	for (i=0;i<numtcpconns;i++)
+		close (tcpconns[i].fd);
+	numtcpconns = 0;
+	if (tcplisten >= 0)
+		close (tcplisten);
+	tcplisten = -1;
+}
+
+void SYS_TcpSend (const unsigned char *addr, const void *data, int len)
+{
+	unsigned char pkt[TCPMAXPKT];
+
+	if (len > TCPMAXPKT-IPXHDR)
+		return;
+	IpxHeader (pkt,IPXHDR+len,addr,IPXSOCKET,tcpmyaddr,IPXSOCKET);
+	memcpy (pkt+IPXHDR,data,len);
+	if (tcpserving)
+		TcpRelay (pkt,IPXHDR+len,NULL);
+	else
+		TcpQueue (&tcpserverconn,pkt,IPXHDR+len);
+}
+
+int SYS_TcpGet (void *buf, int max, unsigned char *from)
+{
+	static	int	toldgone;
+	unsigned char	pkt[TCPMAXPKT];
+	int		i,n;
+
+	for (;;)
+	{
+		if (tcpserving)
+		{
+			// take in what's come, passing it on; then what's for us
+			TcpAccept ();
+			for (i=0;i<numtcpconns;)
+			{
+				tcpconn_t *c = &tcpconns[i];
+
+				if (!TcpFlush (c))
+				{
+					TcpDrop (i);
+					continue;
+				}
+				while ((n = TcpFrame (c,pkt)) > 0)
+					if (pkt[16] != 0 || pkt[17] != 2)
+						TcpRelay (pkt,n,c);
+				if (n < 0)
+				{
+					TcpDrop (i);
+					continue;
+				}
+				i++;
+			}
+			if (ipxlocaltail == ipxlocalhead)
+				return 0;
+			n = ipxlocallen[ipxlocaltail];
+			memcpy (pkt,ipxlocal[ipxlocaltail],n);
+			ipxlocaltail = (ipxlocaltail+1) & 63;
+		}
+		else
+		{
+			TcpFlush (&tcpserverconn);
+			n = TcpFrame (&tcpserverconn,pkt);
+			if (n < 0 && tcpserverconn.fd >= 0)
+			{
+				if (!toldgone)
+					fprintf (stderr,"TCP: the server closed the connection\n");
+				toldgone = 1;
+				close (tcpserverconn.fd);
+				tcpserverconn.fd = -1;
+			}
+			if (n <= 0)
+				return 0;
+		}
+		if (n < IPXHDR || pkt[16] != (IPXSOCKET >> 8) || pkt[17] != (IPXSOCKET & 0xff))
+			continue;						// not the game's
+		memcpy (from,pkt+18,10);
+		n -= IPXHDR;
+		if (n > max)
+			n = max;
+		memcpy (buf,pkt+IPXHDR,n);
+		return n;
+	}
+}
+
+void SYS_TcpMyAddr (unsigned char *addr)
+{
+	memcpy (addr,tcpmyaddr,10);
 }

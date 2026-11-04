@@ -57,6 +57,12 @@ used). The other players are drawn as BJ from ``PLAYERS.WL6`` (see
 below) when it's next to the game, otherwise with the SS sprites; either
 way recolored green, red, gold and white. Another player's shots,
 pickups and doors are heard from where that player is. Esc leaves the game and the others play on.
+A player who goes quiet (the machine crashed, the network went) is
+dropped after 8 seconds and the others play on. A free slot (somebody
+left or was dropped) can be taken again by running the same command
+(the same ``-nodes``): it finds the game going on and joins it where it
+is; back in the same slot with the same name, the score is kept. If
+the game is full it waits for a slot.
 T starts a chat message (Enter sends, Esc drops it); while typing,
 Alt+1 to Alt+0 send the chat macros, which SETUP edits
 (``CHATMACS.CFG``).
@@ -202,6 +208,23 @@ co-op with ``-connect``, the others it finds are passed along::
   ./wolf3d -deathmatch -connect 192.168.1.20 -name Fritz
   ./wolf3d -nodes 2 -connect example.org:27135        # co-op
 
+Or over TCP, through a server, for the internet when UDP doesn't get
+through (a firewall, or a router that forwards one port to one
+machine): one player is the server (TCP port 27135, or the one given)
+and the others connect to it; the packets go through the server::
+
+  ./wolf3d -nodes 3 -tcpserver [port]                 # the one the others reach
+  ./wolf3d -nodes 3 -tcp example.org[:port]           # everyone else
+
+(Deathmatch the same way.) The server is a player too, and when it
+leaves the game ends for the others. TCP doesn't make lag better: a lost
+packet holds up the ones after it, so UDP plays better where it works.
+TCP is Linux only (the DOS game has IPX).
+
+The others' ping times (there and back, in milliseconds: green, yellow
+over 120, red over 250) are in the top right corner; P hides them (or
+``-noping``), and the scores (Tab) show them too.
+
 Playing with DOS players: the DOS game in DOSBox talks IPX through
 DOSBox's IPXNET (IPX packets in UDP, through a server everyone connects
 to), and the Linux game can join in. Either DOSBox is the server::
@@ -218,7 +241,7 @@ or the Linux game is (port 213, DOSBox's default, if it may; else
 Co-op (``-nodes``) and deathmatch both work across, either way round, a
 deathmatch newcomer included. Everyone needs the same game data version.
 IPXSETUP's "Network" line picks UDP, joining an IPXNET server or being
-one. (Ports below 1024 need root on Linux, so pick something like 21300
+one, or TCP (connecting to a server, or being one). (Ports below 1024 need root on Linux, so pick something like 21300
 for DOSBox's server there too.) No joysticks yet.
 
 The original source release was made using the ``DEICE.EXE``
