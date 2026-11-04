@@ -2424,14 +2424,15 @@ typedef struct
 	int		burston,burstoff;	// frames shooting, frames not (0: no let up)
 	int		hunt;				// goes after the nearest one this near unseen (tiles; 99: anywhere)
 	boolean	runroam,runfight;	// runs about, runs in on somebody (else walks)
+	int		weapon;				// the gun it goes for (if it has it, and the ammo)
 } botskill_t;
 
 static	botskill_t botskills[4] =
 {
-	{30,10,4, 50, 6,24, 0,false,false},	// 0 easy: walks, looks ahead, short bursts
-	{20, 6,5, 70,10,16, 8,false,true},		// 1 normal
-	{12, 4,7, 90,18, 8,20,true,true},		// 2 hard
-	{ 6, 2,9,180,99, 0,99,true,true}		// 3 vicious: sees all round, always hunting
+	{30,10,4, 50, 6,24, 0,false,false,wp_pistol},		// 0 easy: walks, looks ahead, short bursts
+	{20, 6,5, 70,10,16, 8,false,true,wp_pistol},		// 1 normal
+	{12, 4,7, 90,18, 8,20,true,true,wp_machinegun},	// 2 hard
+	{ 6, 2,9,180,99, 0,99,true,true,wp_chaingun}		// 3 vicious: sees all round, always hunting
 };
 static char *botskillnames[4] = {"easy","normal","hard","vicious"};
 static	byte	cmdsender[MAXPLAYERS][NETRING];	// a bot's controls: who sent them
@@ -2652,6 +2653,7 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 	botbrain_t *b = &brain[k];
 	int		i,best,vis,bestvis,want,diff,tol,react,maxturn,tx,ty,door,angle;
 	botskill_t *sk;
+	boolean	semi;
 	long	d,bestd,dx,dy,dist,g;
 	boolean	go,knife;
 
@@ -2684,11 +2686,14 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 	maxturn = sk->turn;
 
 	//
-	// the best gun it has
+	// its gun (out of ammo, the knife: the game sees to that)
 	//
 	knife = p->weapon == wp_knife;
-	if (p->ammo > 0 && p->bestweapon > p->weapon && (BotRand () & 7) == 0)
-		cmd->buttons |= 1<<(bt_readyknife+p->bestweapon);
+	i = sk->weapon < p->bestweapon ? sk->weapon : p->bestweapon;
+	if (p->ammo > 0 && p->weapon != i)
+		cmd->buttons |= 1<<(bt_readyknife+i);
+	// the pistol and the knife fire once a press: let go in between
+	semi = p->weapon == wp_pistol || p->weapon == wp_knife;
 
 	//
 	// who to go for: the nearest one in sight, else the nearest
@@ -2769,7 +2774,7 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 		if (b->seen >= react && abs (diff) <= tol && (!knife || dist < 0x18000))
 		{
 			// in bursts, with a breather between
-			if (!sk->burstoff || b->burst < sk->burston)
+			if ((!sk->burstoff || b->burst < sk->burston) && !(semi && (b->burst & 1)))
 				cmd->buttons |= 1<<bt_attack;
 			if (++b->burst >= sk->burston+sk->burstoff)
 				b->burst = 0;
