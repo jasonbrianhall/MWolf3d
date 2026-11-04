@@ -227,6 +227,8 @@ static void ShowHelp (void)
 "  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
 "  -timelimit N             deathmatch: the next level after N minutes (30; 0: never)\n"
 "  -fraglimit N             deathmatch: N frags win the level (20; 0: no limit)\n"
+"  -bots N                  deathmatch: N bots join (0-14; they leave to make room\n"
+"                           for players; -skill makes them better or worse)\n"
 "                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -connect HOST[:PORT]     a game that's not on the local network\n"
@@ -273,6 +275,8 @@ static void ShowHelp (void)
 "  -monsters                deathmatch with the map's enemies, back 1-2 minutes\n"
 "  -timelimit N             deathmatch: the next level after N minutes (30; 0: never)\n"
 "  -fraglimit N             deathmatch: N frags win the level (20; 0: no limit)\n"
+"  -bots N                  deathmatch: N bots join (0-14; they leave to make room\n"
+"                           for players; -skill makes them better or worse)\n"
 "                           after they're killed (the starter's choice)\n"
 "  -name NAME               what the others see (else NAME.CFG)\n"
 "  -netlog                  write NETLOG.TXT\n",

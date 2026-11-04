@@ -99,6 +99,17 @@ dropped after 8 seconds and the rest play on. Names (``-name``, or NAME.CFG, whi
 in the chat, the kills and the score table, in co-op too. IPXSETUP's
 network screen has a Co-op / Deathmatch choice and the name.
 
+Bots: ``-bots N`` (Bots in IPXSETUP; the game starter's choice, up to
+14) brings N bots into a deathmatch, in SS uniforms of each one's color
+(even when the others are BJ), named "Hans (bot)" and so on. They hunt
+the nearest player, open doors, find their way round the map and come
+back when killed; ``-skill`` makes them quicker on the trigger and
+better shots (0 to 3). They never take the last free slot, and when a
+newcomer finds the game full one leaves to make room. The arbiter's
+machine (the lowest numbered player) works their controls out and sends
+them like a player's own, so the others need nothing more; when it
+leaves the next one takes them over. Bots, DOS and Linux alike.
+
 Every run adds to ``WOLFLOG.TXT`` (in the game's directory) what it
 decided and why: the command line (and what SETUP/IPXSETUP ran), single
 player, co-op or deathmatch, the network (interfaces, broadcast
