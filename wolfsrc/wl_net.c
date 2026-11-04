@@ -167,6 +167,7 @@ static	void	AddChatLine (char *text, int color);
 static	void	DMSpawn (netplayer_t *p);
 static	void	DMLoadout (void);
 static	void	ShowFrags (int p);
+static	char	*PingStr (int p);
 
 static	char	myname[NETNAMELEN+1];	// -name
 #define playercolors	NetPlayerColors ()
@@ -1992,11 +1993,14 @@ static int IPXGet (void *buf, byte *from)
 static	boolean	ipxup;
 static	byte	myaddr[10];
 static	boolean	ipxnet;				// -ipxnet / -ipxserver: DOSBox's IPX, not UDP
-static	boolean	ipxserving;			// -ipxserver
+static	boolean	ipxserving;			// -ipxserver (-tcpserver)
+static	boolean	tcpnet;				// -tcp / -tcpserver: ipxnet's packets over TCP
 
 static void IPXSend (int slot, byte *addr, void *data, int len)
 {
-	if (ipxnet)
+	if (tcpnet)
+		SYS_TcpSend (addr,data,len);
+	else if (ipxnet)
 		SYS_IpxSend (addr,data,len);
 	else
 		SYS_NetSend (addr,data,len);
@@ -2005,8 +2009,8 @@ static void IPXSend (int slot, byte *addr, void *data, int len)
 static boolean IPXStartup (void)
 {
 	int		i,port = UDPPORT;
-	char	*server = NULL;
-	int		serve = 0;
+	char	*server = NULL,*tcpserver = NULL;
+	int		serve = 0,tcpserve = 0;
 
 	for (i=1;i<_argc;i++)
 	{
@@ -2016,6 +2020,21 @@ static boolean IPXStartup (void)
 			server = _argv[i+1];
 		if (!stricmp (_argv[i],"-ipxserver"))
 			serve = i+1 < _argc && isdigit (_argv[i+1][0]) ? atoi (_argv[i+1]) : 213;
+		if (!stricmp (_argv[i],"-tcp") && i+1 < _argc)
+			tcpserver = _argv[i+1];
+		if (!stricmp (_argv[i],"-tcpserver"))
+			tcpserve = i+1 < _argc && isdigit (_argv[i+1][0]) ? atoi (_argv[i+1]) : UDPPORT;
+	}
+	if (tcpserver || tcpserve)
+	{
+		// over TCP, through a server: for the internet
+		if (!SYS_TcpStartup (tcpserver,tcpserve))
+			return false;
+		SYS_TcpMyAddr (myaddr);
+		ipxnet = tcpnet = true;
+		ipxserving = tcpserve != 0;
+		ipxup = true;
+		return true;
 	}
 	if (server || serve)
 	{
@@ -2041,11 +2060,15 @@ void NetShutdown (void)
 		return;
 	NetLeaving ();
 	ipxup = false;
+	if (tcpnet)
+		SYS_TcpShutdown ();
 	SYS_NetShutdown ();
 }
 
 static int IPXGet (void *buf, byte *from)
 {
+	if (tcpnet)
+		return SYS_TcpGet (buf,PKTMAX,from);
 	if (ipxnet)
 		return SYS_IpxGet (buf,PKTMAX,from);
 	return SYS_NetGet (buf,PKTMAX,from);
@@ -2085,7 +2108,8 @@ static char *AddrStr (byte *a)
 =============================================================================
 */
 
-enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop};
+enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop,
+	pk_ping,pk_pong};
 
 #define NETVERSION	7
 
@@ -2138,7 +2162,7 @@ typedef struct
 	byte	episode,level,skill,players;
 	unsigned long nonce;		// the asker's
 	byte	arbiter[10];		// where to ask to come in (0: the sender)
-	byte	monsters,pad;
+	byte	monsters,friendlyfire;
 	word	timelimit;			// minutes a level
 	word	fraglimit,pad2;		// frags that win it
 	unsigned long build;		// BuildId: a snapshot only fits the same program
@@ -2183,6 +2207,20 @@ typedef struct
 	long	lastframe;
 } __attribute__((packed)) droppacket_t;
 
+// the ping times: every second a ping to each of the others, which sends
+// it straight back (a pong); the time it took there and back is the ping.
+// (Not part of the game: a version without them just doesn't answer.)
+typedef struct
+{
+	byte	magic[2];
+	byte	type,player;		// the ping's sender; the pong's
+	unsigned long time;			// the sender's clock (NetMillis), sent back as it was
+} __attribute__((packed)) pingpacket_t;
+
+static	long	pingms[MAXPLAYERS];		// the last round trip, in ms
+static	boolean	haveping[MAXPLAYERS];
+static	boolean	showpings;			// the list in the corner (P; -noping: off)
+
 static	droppacket_t dropped;
 static	int		dropannounce;			// frames to keep telling them
 
@@ -2210,6 +2248,7 @@ static	long	desyncframe = -1;
 
 static	int		hello_episode,hello_level,hello_skill;
 static	unsigned long mynonce;
+static	unsigned long npnonce[MAXPLAYERS];	// co-op: each player's, as found at the start
 static	boolean	inplay;				// in NetPlayLoop: tell the others when we go
 
 // -connect: where else to say hello (Linux: a game not on this network)
@@ -2319,6 +2358,60 @@ static void SendTics (int type)
 		}
 	if (dropannounce)
 		dropannounce--;
+}
+
+//
+// NetMillis: a clock in milliseconds, for the ping times (DOS: from
+// TimeCount, which goes back to 0 at a level start: pings across that
+// come out wrong, and are thrown away)
+//
+static unsigned long NetMillis (void)
+{
+#ifdef __linux__
+	return SYS_Millis ();
+#else
+	return (unsigned long)TimeCount*1000/70;
+#endif
+}
+
+static void SendPings (void)
+{
+	pingpacket_t pk;
+	int		i;
+
+	memset (&pk,0,sizeof(pk));
+	pk.magic[0] = 'W'; pk.magic[1] = '3';
+	pk.type = pk_ping;
+	pk.player = localplayer;
+	pk.time = NetMillis ();
+	for (i=0;i<numplayers;i++)
+		if (i != localplayer && !np[i].gone)
+			IPXSend (i,np[i].addr,&pk,sizeof(pk));
+}
+
+static void ReceivePing (byte *buf, int len, byte *from)
+{
+	pingpacket_t *pk = (pingpacket_t *)buf;
+	long	ms;
+
+	if (len < sizeof(pingpacket_t))
+		return;
+	if (pk->type == pk_ping)
+	{
+		pk->type = pk_pong;			// straight back, as it came
+		pk->player = localplayer;
+		IPXSend (0,from,pk,sizeof(*pk));
+		return;
+	}
+	if (pk->player >= numplayers || pk->player == localplayer)
+		return;
+	ms = (long)(NetMillis () - pk->time);
+	if (ms < 0 || ms > 60000)
+		return;						// (DOS: the clock went back to 0)
+	pingms[pk->player] = ms;
+	haveping[pk->player] = true;
+	if (netlog)
+		fprintf (netlog,"ping %s %ld ms\n",NetName (pk->player),ms);
 }
 
 static void MakeHello (hellopacket_t *h, int found, byte (*addrs)[10])
@@ -2633,8 +2726,8 @@ static void DrawScores (void)
 
 	if (cols == 1)
 	{
-		colw = 168;
-		x0 = viewwidth/2 - 84;
+		colw = deathmatch ? 208 : 180;	// (the ping column on the right)
+		x0 = viewwidth/2 - colw/2;
 		if (x0 < 4)
 			x0 = 4;
 	}
@@ -2678,6 +2771,7 @@ static void DrawScores (void)
 				DrawText (x0+92,y,deathmatch ? "Frags" : "Score",7);
 				if (deathmatch)
 					DrawText (x0+132,y,"Deaths",7);
+				DrawText (x0+(deathmatch ? 176 : 148),y,"Ping",7);
 			}
 			else
 			{
@@ -2709,6 +2803,7 @@ static void DrawScores (void)
 				sprintf (str,"%ld",j == netcontext ? gamestate.score : np[j].score);
 				DrawText (x0+92,y,str,c);
 			}
+			DrawText (x0+(deathmatch ? 176 : 148),y,PingStr (j),c);
 		}
 		y += step;
 		if (i % rows == rows-1)
@@ -2725,6 +2820,42 @@ static void DrawScores (void)
 =
 ===================
 */
+
+//
+// DrawPings: the others' ping times, in the top right corner
+//
+static char *PingStr (int p)
+{
+	static char str[16];
+
+	if (p == localplayer)
+		return "";
+	if (!haveping[p])
+		return "--";
+	sprintf (str,"%ld ms",pingms[p]);
+	return str;
+}
+
+static void DrawPings (void)
+{
+	int		i,y,c;
+	word	w,h,nw;
+	char	*ps;
+
+	y = 2;
+	for (i=0;i<numplayers;i++)
+	{
+		if (i == localplayer || np[i].removed || y > viewheight-12)
+			continue;
+		ps = PingStr (i);
+		c = !haveping[i] ? 7 : pingms[i] < 120 ? 10 : pingms[i] < 250 ? 14 : 12;
+		VW_MeasurePropString (ps,&w,&h);
+		VW_MeasurePropString (NetName (i),&nw,&h);
+		DrawTextTo (viewwidth-6-w-nw-6,y,NetName (i),playercolors[i],viewwidth-6-w-4);
+		DrawTextTo (viewwidth-6-w,y,ps,c,viewwidth);
+		y += 10;
+	}
+}
 
 void NetDrawChat (void)
 {
@@ -2752,6 +2883,9 @@ void NetDrawChat (void)
 		DrawText (4,y,line,15);
 	}
 
+	if (showpings)
+		DrawPings ();
+
 	fontnumber = oldfont;
 }
 
@@ -2767,6 +2901,7 @@ static void PlayerLeft (int p, long lastframe)
 	if (np[p].gone)
 		return;
 	np[p].gone = true;
+	haveping[p] = false;
 	sprintf (str,"%s left the game",NetName (p));
 	AddChatLine (str,7);
 	np[p].lastframe = lastframe;
@@ -2804,7 +2939,7 @@ static	byte	*spend;
 static void Put (void *data, long len)
 {
 	if (sp+len > spend)
-		Quit ("Deathmatch snapshot too big");
+		Quit ("Snapshot too big");
 	memcpy (sp,data,len);
 	sp += len;
 }
@@ -2812,7 +2947,7 @@ static void Put (void *data, long len)
 static void Get (void *data, long len)
 {
 	if (sp+len > spend)
-		Quit ("Deathmatch snapshot cut short");
+		Quit ("Snapshot cut short");
 	memcpy (data,sp,len);
 	sp += len;
 }
@@ -3066,7 +3201,7 @@ static long WriteGame (byte *buf, int slot)
 
 		v = StateIndex (o->state);
 		if (v == -2)
-			Quit ("Deathmatch snapshot: a state wl_states.h doesn't have");
+			Quit ("Snapshot: a state wl_states.h doesn't have");
 		SnapPutLong (v);
 		SnapPutLong (ObjIndex (o->next));
 		SnapPutLong (ObjIndex (o->prev));
@@ -3321,6 +3456,7 @@ static void ReplyInfo (byte *from, unsigned long nonce)
 			pk.players++;
 	pk.nonce = nonce;
 	pk.monsters = dmmonsters;
+	pk.friendlyfire = hello_ff;
 	pk.timelimit = dmtimelimit;
 	pk.fraglimit = dmfraglimit;
 	pk.build = BuildId ();
@@ -3337,8 +3473,14 @@ static void ReceiveJoin (joinpacket_t *jp, byte *from)
 {
 	int		i,slot;
 
-	if (!inplay || Arbiter () != localplayer)
+	if (!inplay)
 		return;
+	if (Arbiter () != localplayer)
+	{
+		// not ours to say: who is (the one it asked may have gone)
+		ReplyInfo (from,jp->nonce);
+		return;
+	}
 	if (snaptotal && snapnonce == jp->nonce)
 	{
 		if (snapacked < snaptotal)
@@ -3416,10 +3558,18 @@ static void NetReceive (void)
 			continue;
 
 		case pk_hello:
+			if (len < sizeof(hellopacket_t) || ((hellopacket_t *)buf)->version != NETVERSION
+			|| ((hellopacket_t *)buf)->nonce == mynonce)
+				continue;
 			// a straggler still looking for us
 			for (i=0;i<numplayers;i++)
-				if (i != localplayer && !memcmp (np[i].addr,from,10))
-					SendHello (from);
+				if (i != localplayer && !memcmp (np[i].addr,from,10)
+				&& npnonce[i] == ((hellopacket_t *)buf)->nonce)
+					break;
+			if (i < numplayers)
+				SendHello (from);
+			else if (!deathmatch && inplay && ((hellopacket_t *)buf)->numnodes == numplayers)
+				ReplyInfo (from,((hellopacket_t *)buf)->nonce);	// co-op: a newcomer, come in
 			continue;
 
 		case pk_query:
@@ -3428,7 +3578,7 @@ static void NetReceive (void)
 			continue;
 
 		case pk_join:
-			if (deathmatch && len >= sizeof(joinpacket_t)
+			if (len >= sizeof(joinpacket_t)
 			&& ((joinpacket_t *)buf)->version == NETVERSION)
 				ReceiveJoin ((joinpacket_t *)buf,from);
 			continue;
@@ -3447,10 +3597,15 @@ static void NetReceive (void)
 			continue;
 
 		case pk_drop:
-			if (deathmatch && len >= sizeof(droppacket_t)
+			if (len >= sizeof(droppacket_t)
 			&& ((droppacket_t *)buf)->slot < numplayers
 			&& ((droppacket_t *)buf)->slot != localplayer)
 				PlayerLeft (((droppacket_t *)buf)->slot,((droppacket_t *)buf)->lastframe);
+			continue;
+
+		case pk_ping:
+		case pk_pong:
+			ReceivePing (buf,len,from);
 			continue;
 
 		case pk_tics:
@@ -3590,6 +3745,7 @@ static void NetOptions (void)
 	SD_PlayHook = NetPlaySound;
 	if (Parm ("-netlog"))
 		netlog = fopen ("NETLOG.TXT","w");
+	showpings = !Parm ("-noping");		// (P switches it in the game)
 	NoWait = true;
 	LoadMacros ();
 }
@@ -3602,7 +3758,9 @@ static void NetTransport (void)
 	if (!IPXStartup ())
 	{
 #ifdef __linux__
-		NetSay ("Can't start the network (UDP port in use? -port N for another).\n");
+		NetSay (tcpnet || Parm ("-tcp") || Parm ("-tcpserver")
+			? "Can't start the network (TCP: the server not there, or the port in use?).\n"
+			: "Can't start the network (UDP port in use? -port N for another).\n");
 #else
 		NetSay ("No IPX driver found (load one, or use DOSBox's ipx=true and IPXNET).\n");
 #endif
@@ -3655,7 +3813,8 @@ static void NetTransport (void)
 		}
 	}
 	else
-		GameLog ("Network: IPX over DOSBox's IPXNET (%s); our address %s",
+		GameLog ("Network: IPX %s (%s); our address %s",
+			tcpnet ? "packets over TCP" : "over DOSBox's IPXNET",
 			ipxserving ? "we're the server" : "a client",AddrStr (myaddr));
 #else
 	GameLog ("Network: IPX; our address %s",AddrStr (myaddr));
@@ -3931,6 +4090,34 @@ void NetStartup (void)
 			if (len < 4 || buf[0] != 'W' || buf[1] != '3')
 				continue;
 
+			if (pk->type == pk_info && len >= sizeof(infopacket_t) && found == 1
+			&& ((infopacket_t *)buf)->nonce == mynonce)
+			{
+				infopacket_t *ip = (infopacket_t *)buf;
+
+				// a co-op game going on, with room: come in to it
+				if (ip->version != NETVERSION || ip->build != BuildId ())
+				{
+					if (!badversion)
+						NetSay ("There's a co-op game going on, but from another version or build\n"
+							"of the game: everyone needs the same %s.\n",_argv[0]);
+					badversion = true;
+					continue;
+				}
+				hello_episode = ip->episode;
+				hello_level = ip->level;
+				hello_skill = ip->skill;
+				hello_ff = ip->friendlyfire;
+				for (i=0;i<10 && !ip->arbiter[i];i++)
+					;
+				memcpy (arbaddr,i == 10 ? from : ip->arbiter,10);
+				GameLog ("A co-op game going on answered from %s (%d playing)",AddrStr (from),ip->players);
+				NetSay ("Found a co-op game going on: episode %d, floor %d, skill %d, %d of %d playing.\n"
+					"Joining...\n",hello_episode+1,hello_level+1,hello_skill,ip->players,nodes);
+				dmjoining = true;
+				localplayer = 0;			// till we're told
+				return;
+			}
 			if (pk->type == pk_hello)
 			{
 				if (len >= 4 && pk->version != NETVERSION && !badversion)
@@ -4030,6 +4217,7 @@ void NetStartup (void)
 	{
 		memcpy (np[i].addr,addrs[i],10);
 		strcpy (np[i].name,names[i]);
+		npnonce[i] = nonces[i];
 		if (nonces[i] == mynonce)
 			localplayer = i;
 	}
@@ -4356,7 +4544,7 @@ static void ShowMessage (char *str)
 // DropArbiter: who decides to go on without player p: the lowest numbered
 // player still in the game, not counting p
 //
-#define DROPSECONDS	8
+#define DROPSECONDS	8			// (co-op too: then the slot's free to come back to)
 
 static int DropArbiter (int p)
 {
@@ -4400,7 +4588,7 @@ static void WaitForFrame (long f)
 		}
 		if (shown && Keyboard[sc_Escape])
 			Quit (NULL);				// NetShutdown tells them
-		if (deathmatch && TimeCount - start > 70*(f < FRAMESASEC ? 3*DROPSECONDS : DROPSECONDS)
+		if (TimeCount - start > 70*(f < FRAMESASEC ? 3*DROPSECONDS : DROPSECONDS)
 		&& DropArbiter (i) == localplayer)
 		{
 			// it's gone quiet: play on without it
@@ -4469,11 +4657,12 @@ static void DMJoin (int k, long f)
 {
 	netplayer_t *p = &np[k];
 	joinrec_t	*rec = &joinrecs[k];
-	char	str[60];
+	char	str[60],oldname[NETNAMELEN+1];
 	int		i,cur;
 
 	if (!p->removed)
 		return;					// (twice?)
+	strcpy (oldname,p->name);
 
 	cur = netcontext;
 	NetSetContext (k);
@@ -4497,7 +4686,13 @@ static void DMJoin (int k, long f)
 	p->respawn = p->pain = p->moving = 0;
 	gotchatid[k] = false;
 
-	gamestate.score = gamestate.oldscore = 0;
+	if (!deathmatch && rec->frame == f && !strcmp (oldname,p->name))
+		;						// co-op, back in the same slot: the score's still there
+	else
+	{
+		gamestate.score = gamestate.oldscore = 0;
+		gamestate.nextextra = EXTRAPOINTS;
+	}
 	gamestate.lives = 3;
 	thrustspeed = 0;
 	anglefrac = 0;
@@ -4507,11 +4702,27 @@ static void DMJoin (int k, long f)
 	memset (buttonstate,0,sizeof(buttonstate));
 	memset (buttonheld,0,sizeof(buttonheld));
 	LastAttacker = NULL;
-	DMLoadout ();
-	DMSpawn (p);
-	DMPlace (p);
-	ConnectAreas ();
-	RespawnSound (p->ob);
+	if (deathmatch)
+	{
+		DMLoadout ();
+		DMSpawn (p);
+		DMPlace (p);
+		ConnectAreas ();
+		RespawnSound (p->ob);
+	}
+	else
+	{
+		// co-op: as at the start of a game, where this slot starts the
+		// level, with the keys the others have found
+		gamestate.ammo = 0;
+		gamestate.weapon = gamestate.bestweapon = gamestate.chosenweapon = wp_pistol;
+		gamestate.keys = 0;
+		for (i=0;i<numplayers;i++)
+			if (i != k && !np[i].removed)
+				gamestate.keys |= np[i].keys;
+		Respawn (p);			// health, ammo, the spot, the sound
+	}
+	haveping[k] = false;
 
 	NetSetContext (cur);
 
@@ -4716,6 +4927,20 @@ frozen:
 ===================
 */
 
+// P is for the ping times, unless it's one of the controls
+static boolean PingKeyBound (void)
+{
+	int i;
+
+	for (i=0;i<4;i++)
+		if (dirscan[i] == sc_P)
+			return true;
+	for (i=0;i<NUMBUTTONS;i++)
+		if (buttonscan[i] == sc_P)
+			return true;
+	return false;
+}
+
 static void NetCheckKeys (void)
 {
 	if (Paused)
@@ -4729,6 +4954,12 @@ static void NetCheckKeys (void)
 
 	if (AM_Keys (LastScan))
 		LastScan = sc_None;
+
+	if (LastScan == sc_P && !PingKeyBound ())
+	{
+		showpings ^= true;
+		LastScan = sc_None;
+	}
 
 	if (LastScan == sc_Escape || LastScan == sc_F10)
 	{
@@ -4783,6 +5014,7 @@ static void JoinGame (void)
 	static	boolean	*got;
 	int		total,have,i;
 	long	start,lastsend,len;
+	boolean	fullshown = false;
 
 	packed = malloc (SNAPMAX+SNAPMAX/128+16);
 	raw = malloc (SNAPMAX);
@@ -4808,16 +5040,44 @@ static void JoinGame (void)
 	{
 		if (TimeCount - lastsend >= 35)
 		{
+			// to the arbiter, and around: if it's gone, the others say who is now
 			IPXSend (0,arbaddr,&jp,sizeof(jp));
+			if (total == -1)
+				SendAround (&jp,sizeof(jp));
 			lastsend = TimeCount;
 		}
 		while (IPXGet (buf,from))
 		{
 			if (buf[0] != 'W' || buf[1] != '3')
 				continue;
+			if (buf[2] == pk_info && total == -1 && ((infopacket_t *)buf)->nonce == mynonce)
+			{
+				infopacket_t *ip = (infopacket_t *)buf;
+
+				// (a late answer to our query says the sender: never mind
+				// those; one that names another arbiter is somebody telling us)
+				for (i=0;i<10 && !ip->arbiter[i];i++)
+					;
+				if (i < 10 && memcmp (arbaddr,ip->arbiter,10))
+				{
+					memcpy (arbaddr,ip->arbiter,10);
+					GameLog ("Asking %s to let us in, now",AddrStr (arbaddr));
+				}
+				continue;
+			}
 			if (buf[2] == pk_full && !memcmp (buf+4,&mynonce,4))
-				Quit (buf[3] == 1 ? "That deathmatch game is another build of the game"
-					: "That deathmatch game is full");
+			{
+				if (buf[3] == 1)
+					Quit ("That game is another build of the game");
+				if (deathmatch)
+					Quit ("That deathmatch game is full");
+				// co-op: a slot comes free when somebody leaves or is dropped
+				if (!fullshown)
+					ShowMessage ("The co-op game is full:\nwaiting for a free slot...\n(Esc gives up)");
+				fullshown = true;
+				start = TimeCount;
+				continue;
+			}
 			if (buf[2] != pk_snap || sk->nonce != mynonce
 			|| sk->total == 0 || sk->total > SNAPMAX/SNAPCHUNK || sk->chunk >= sk->total
 			|| sk->len > SNAPCHUNK || (total != -1 && sk->total != total))
@@ -4849,7 +5109,7 @@ static void JoinGame (void)
 		if (Keyboard[sc_Escape])
 			Quit (NULL);
 		if (TimeCount - start > 70*40)
-			Quit ("No answer from the deathmatch game");
+			Quit ("No answer from the network game");
 #ifdef __linux__
 		SYS_Sleep ();
 #endif
@@ -4857,9 +5117,9 @@ static void JoinGame (void)
 
 	len = Unpack (packed,len,raw,SNAPMAX);
 	if (len < 0 || !ReadGame (raw,len))
-		Quit ("The deathmatch game sent a bad snapshot");
-	GameLog ("Joined the deathmatch as player %d: floor %d, frame %ld",localplayer+1,
-		gamestate.mapon+1,netframe);
+		Quit ("The network game sent a bad snapshot");
+	GameLog ("Joined the %s as player %d: floor %d, frame %ld",deathmatch ? "deathmatch" : "co-op game",
+		localplayer+1,gamestate.mapon+1,netframe);
 
 	// the arbiter's own address is where it sent from
 	memcpy (np[Arbiter ()].addr,arbaddr,10);
@@ -4909,6 +5169,12 @@ void NetPlayLoop (void)
 		for (f=0;f<NETRING;f++)
 			np[i].cmdframe[f] = -1;
 		np[i].ack = 0;
+		// frame numbers start again: a player who joined late in the last
+		// level has controls from the start of this one, and one who's
+		// gone has none (else everybody would wait for them)
+		np[i].firstcmd = 0;
+		if (np[i].removed)
+			np[i].lastframe = -1;
 	}
 	for (f=0;f<NETRING;f++)
 		hashframes[f] = -1;
@@ -5002,6 +5268,11 @@ void NetPlayLoop (void)
 			VW_FadeIn ();
 
 		NetCheckKeys ();
+
+		// (not straight after the controls: on DOS they'd wait for the
+		// same send slots)
+		if (netframe % FRAMESASEC == 0)
+			SendPings ();
 	} while (!playstate);
 
 	//

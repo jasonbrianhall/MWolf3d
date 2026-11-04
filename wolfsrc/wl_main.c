@@ -233,6 +233,10 @@ static void ShowHelp (void)
 "  -ipxnet HOST[:PORT]      play with DOS players: IPX through DOSBox's IPXNET\n"
 "                           server (IPXNET STARTSERVER) instead of UDP\n"
 "  -ipxserver [PORT]        be that server (DOSBox: IPXNET CONNECT this-host)\n"
+"  -tcp HOST[:PORT]         over TCP instead, through a -tcpserver (for the\n"
+"                           internet, when UDP doesn't get through)\n"
+"  -tcpserver [PORT]        be that server, on TCP port 27135 or PORT\n"
+"  -noping                  don't show the ping times (P in the game switches them)\n"
 "  -netlog                  write NETLOG.TXT\n",
 		_argv[0]);
 #else

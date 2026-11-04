@@ -217,6 +217,15 @@ void	SYS_IpxSend (const unsigned char *addr, const void *data, int len);
 int		SYS_IpxGet (void *buf, int max, unsigned char *from);
 void	SYS_IpxMyAddr (unsigned char *addr);
 
+// The same IPX packets over TCP, through a server (for the internet, when
+// UDP doesn't get through): -tcpserver [port] / -tcp host[:port]
+int		SYS_TcpStartup (const char *server, int serve);	// as SYS_IpxStartup
+void	SYS_TcpShutdown (void);
+void	SYS_TcpSend (const unsigned char *addr, const void *data, int len);
+int		SYS_TcpGet (void *buf, int max, unsigned char *from);
+void	SYS_TcpMyAddr (unsigned char *addr);
+uint32_t	SYS_Millis (void);		// a millisecond clock (the ping times)
+
 #ifndef SYS_LINUX_IMPL
 #define long int
 #endif
