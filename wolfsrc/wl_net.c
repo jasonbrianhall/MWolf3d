@@ -165,6 +165,7 @@ typedef struct
 
 static	netplayer_t	np[MAXPLAYERS];
 static	int		hello_ff;			// friendly fire (player 1's choice)
+static	int		hello_food;			// co-op: seconds till eaten food is back (0: never; player 1's)
 static	boolean	SpawnSpotClear (netplayer_t *p);
 static	void	AddChatLine (char *text, int color);
 static	void	DMSpawn (netplayer_t *p);
@@ -995,7 +996,7 @@ void NetEnemyKilled (objtype *ob)
 
 boolean NetStatReserved (int i)
 {
-	return deathmatch && i >= 0 && i < MAXSTATS && dmrespawn[i] > 0;
+	return (deathmatch || hello_food) && i >= 0 && i < MAXSTATS && dmrespawn[i] > 0;
 }
 
 
@@ -1011,6 +1012,19 @@ static boolean DMFloor (int x, int y)
 	if (area < AREATILE || area >= AREATILE+NUMAREAS)
 		return tilemap[x][y] & 0x80;	// a door's tile has no area
 	return true;
+}
+
+//
+// DMItemsStart: at a level start, the map's items, to come back (a
+// deathmatch's, and co-op's food with -foodrespawn)
+//
+static void DMItemsStart (void)
+{
+	int x;
+
+	memset (dmrespawn,0,sizeof(dmrespawn));
+	for (x=0;x<MAXSTATS;x++)
+		dmorig[x] = x < laststatobj-statobjlist ? statobjlist[x].shapenum : -1;
 }
 
 static void DMFindSpots (int sx, int sy)
@@ -1052,9 +1066,7 @@ static void DMFindSpots (int sx, int sy)
 			tail++;
 		}
 	}
-	memset (dmrespawn,0,sizeof(dmrespawn));
-	for (x=0;x<MAXSTATS;x++)
-		dmorig[x] = x < laststatobj-statobjlist ? statobjlist[x].shapenum : -1;
+	DMItemsStart ();
 }
 
 //
@@ -1263,6 +1275,10 @@ static void NetPickups (objtype *ob)
 		GetBonus (statptr);
 		if (deathmatch && statptr->shapenum == -1 && dmorig[statptr-statobjlist] != -1)
 			dmrespawn[statptr-statobjlist] = DMITEMTICS;	// (not what guards drop)
+		else if (!deathmatch && hello_food && statptr->shapenum == -1 && dmorig[statptr-statobjlist] != -1
+		&& (statptr->itemnumber == bo_food || statptr->itemnumber == bo_alpo
+		|| statptr->itemnumber == bo_firstaid))
+			dmrespawn[statptr-statobjlist] = hello_food*70;	// co-op: the food comes back
 		if (gamestate.keys != oldkeys)
 		{
 			// keys are for everybody
@@ -2129,7 +2145,7 @@ typedef struct
 	byte	magic[2];
 	byte	type,version;
 	byte	numnodes,episode,level,skill;
-	byte	gotcount,friendlyfire,numpeers,pad;
+	byte	gotcount,friendlyfire,numpeers,food;	// food: hello_food
 	unsigned long nonce;		// who sent it (its own broadcasts come back)
 	char	name[NETNAMELEN+1];
 	byte	peers[MAXCOOP][10];	// the others it has found (-connect)
@@ -2189,7 +2205,7 @@ typedef struct
 	byte	arbiter[10];		// where to ask to come in (0: the sender)
 	byte	monsters,friendlyfire;
 	word	timelimit;			// minutes a level
-	word	fraglimit,pad2;		// frags that win it
+	word	fraglimit,food;		// frags that win it; co-op: hello_food
 	unsigned long build;		// BuildId: a snapshot only fits the same program
 } __attribute__((packed)) infopacket_t;
 
@@ -2461,6 +2477,7 @@ typedef struct
 	int		wobble,wobbletime;	// aim off by this much, for this long
 	int		usetime;
 	int		burst;				// frames into its burst of fire
+	int		skipitem,skiptime;	// an item it came at wrong: leave it a while
 } botbrain_t;
 
 static	botbrain_t brain[MAXPLAYERS];
@@ -2478,6 +2495,58 @@ static void BotReset (int k)
 	brain[k].target = -1;
 	brain[k].wayx = -1;
 	brain[k].roamx = -1;
+	brain[k].skipitem = -1;
+}
+
+//
+// BotWantItem: the nearest item bot k could do with (food, first aid when
+// it's hurt, ammo when it's low), as a statobjlist index; -1 none
+//
+static int BotWantItem (int k)
+{
+	netplayer_t *p = &np[k];
+	objtype	*ob = p->ob;
+	statobj_t *st;
+	int		i,n,best,food,ammo;
+	long	d,bestd;
+
+	food = p->health < 60;
+	ammo = p->ammo < 25;
+	if (!food && !ammo)
+		return -1;
+	best = -1;
+	bestd = 24;					// (tiles: not right across the map)
+	n = laststatobj - statobjlist;
+	for (i=0,st=statobjlist;i<n;i++,st++)
+	{
+		if (st->shapenum == -1 || !(st->flags & FL_BONUS) || i == brain[k].skipitem)
+			continue;
+		switch (st->itemnumber)
+		{
+		case bo_food: case bo_firstaid: case bo_alpo:
+			if (!food)
+				continue;
+			break;
+		case bo_gibs:
+			if (p->health > 10)
+				continue;
+			break;
+		case bo_clip: case bo_clip2: case bo_25clip:
+			if (!ammo)
+				continue;
+			break;
+		default:
+			continue;
+		}
+		d = abs (st->tilex - ob->tilex) > abs (st->tiley - ob->tiley)
+			? abs (st->tilex - ob->tilex) : abs (st->tiley - ob->tiley);
+		if (d < bestd)
+		{
+			best = i;
+			bestd = d;
+		}
+	}
+	return best;
 }
 
 //
@@ -2654,6 +2723,7 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 	int		i,best,vis,bestvis,want,diff,tol,react,maxturn,tx,ty,door,angle;
 	botskill_t *sk;
 	boolean	semi;
+	int		item;
 	long	d,bestd,dx,dy,dist,g;
 	boolean	go,knife;
 
@@ -2742,6 +2812,24 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 	want = angle;
 
 	//
+	// hurt or low on ammo: what's about to pick up (very hurt, it goes for
+	// it rather than fight)
+	//
+	if (b->skiptime > 0 && --b->skiptime == 0)
+		b->skipitem = -1;
+	item = BotWantItem (k);
+	if (item >= 0 && statobjlist[item].tilex == ob->tilex && statobjlist[item].tiley == ob->tiley)
+	{
+		b->skipitem = item;			// on it, and didn't get it: come back at it later
+		b->skiptime = 70;
+		item = BotWantItem (k);
+	}
+	if (bestvis && item >= 0 && p->health >= 25)
+		item = -1;					// fight first
+	if (item >= 0)
+		bestvis = 0;
+
+	//
 	// getting out of a corner it's stuck in
 	//
 	if (b->unstick > 0)
@@ -2792,7 +2880,12 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 		//
 		// out of sight: the way there (or somewhere to go)
 		//
-		if (best >= 0)
+		if (item >= 0)
+		{
+			tx = statobjlist[item].tilex;
+			ty = statobjlist[item].tiley;
+		}
+		else if (best >= 0)
 		{
 			tx = np[best].ob->tilex;
 			ty = np[best].ob->tiley;
@@ -2826,6 +2919,11 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 			{
 				b->wayx = -1;
 				b->roamx = -1;				// somewhere else, then
+				if (item >= 0)
+				{
+					b->skipitem = item;		// (can't get there)
+					b->skiptime = 350;
+				}
 			}
 		}
 
@@ -3140,6 +3238,7 @@ static void MakeHello (hellopacket_t *h, int found, byte (*addrs)[10])
 	h->level = hello_level;
 	h->skill = hello_skill;
 	h->friendlyfire = hello_ff;
+	h->food = hello_food;
 	h->gotcount = found;
 	h->nonce = mynonce;
 	strcpy (h->name,myname);
@@ -4179,6 +4278,7 @@ static void ReplyInfo (byte *from, unsigned long nonce)
 	pk.nonce = nonce;
 	pk.monsters = dmmonsters;
 	pk.friendlyfire = hello_ff;
+	pk.food = hello_food;
 	pk.timelimit = dmtimelimit;
 	pk.fraglimit = dmfraglimit;
 	pk.build = BuildId ();
@@ -4463,6 +4563,13 @@ static void NetOptions (void)
 	hello_ff = 1;
 	if (Parm ("-nofriendlyfire") || Parm ("-noff"))
 		hello_ff = 0;
+	for (i=1;i<_argc;i++)
+		if (!stricmp (_argv[i],"-foodrespawn"))
+			hello_food = i+1 < _argc && isdigit (_argv[i+1][0]) ? atoi (_argv[i+1]) : 30;
+	if (hello_food < 0)
+		hello_food = 0;
+	if (hello_food > 255)
+		hello_food = 255;
 
 	netgame = true;
 	SD_PlayHook = NetPlaySound;
@@ -4734,7 +4841,7 @@ void NetStartup (void)
 	byte	addrs[MAXPLAYERS][10];
 	unsigned long nonces[MAXPLAYERS];
 	char	names[MAXPLAYERS][NETNAMELEN+1];
-	int		settings[MAXPLAYERS][4];
+	int		settings[MAXPLAYERS][5];
 	boolean	done[MAXPLAYERS];
 	byte	buf[PKTMAX],from[10];
 	hellopacket_t *pk = (hellopacket_t *)buf;
@@ -4800,6 +4907,7 @@ void NetStartup (void)
 	settings[0][1] = hello_level;
 	settings[0][2] = hello_skill;
 	settings[0][3] = hello_ff;
+	settings[0][4] = hello_food;
 	done[0] = false;
 	found = 1;
 	shown = 0;
@@ -4845,6 +4953,7 @@ void NetStartup (void)
 				hello_level = ip->level;
 				hello_skill = ip->skill;
 				hello_ff = ip->friendlyfire;
+				hello_food = ip->food;
 				for (i=0;i<10 && !ip->arbiter[i];i++)
 					;
 				memcpy (arbaddr,i == 10 ? from : ip->arbiter,10);
@@ -4890,6 +4999,7 @@ void NetStartup (void)
 				settings[i][1] = pk->level;
 				settings[i][2] = pk->skill;
 				settings[i][3] = pk->friendlyfire;
+				settings[i][4] = pk->food;
 				if (pk->gotcount == nodes)
 					done[i] = true;
 				for (j=0;j<pk->numpeers && j<MAXCOOP;j++)
@@ -4941,7 +5051,7 @@ void NetStartup (void)
 			if (nonces[j] < nonces[i])
 			{
 				byte t[10];
-				int  s[4];
+				int  s[5];
 				unsigned long n;
 				char nm[NETNAMELEN+1];
 				memcpy (t,addrs[i],10); memcpy (addrs[i],addrs[j],10); memcpy (addrs[j],t,10);
@@ -4963,9 +5073,12 @@ void NetStartup (void)
 	hello_level = settings[0][1];
 	hello_skill = settings[0][2];
 	hello_ff = settings[0][3];
+	hello_food = settings[0][4];
 
 	NetSay ("You are player %d of %d: episode %d, level %d, skill %d, friendly fire %s\n",
 		localplayer+1,nodes,hello_episode+1,hello_level+1,hello_skill,hello_ff ? "on" : "off");
+	if (hello_food)
+		NetSay ("Food and first aid come back %d seconds after they're picked up.\n",hello_food);
 }
 
 //
@@ -5055,6 +5168,8 @@ void NetLevelStart (void)
 
 	if (deathmatch)
 		DMFindSpots (p0->tilex,p0->tiley);
+	else if (hello_food)
+		DMItemsStart ();
 
 	memset (seen,0,sizeof(seen));
 	head = tail = 0;
@@ -5634,7 +5749,7 @@ static void RunFrame (long f)
 	NetSetContext (0);
 	MoveDoors ();
 	MovePWalls ();
-	if (deathmatch)
+	if (deathmatch || hello_food)
 		DMItems ();
 
 	inrunframe = true;

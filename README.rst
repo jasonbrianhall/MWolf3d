@@ -57,6 +57,10 @@ used). The other players are drawn as BJ from ``PLAYERS.WL6`` (see
 below) when it's next to the game, otherwise with the SS sprites; either
 way recolored green, red, gold and white. Another player's shots,
 pickups and doors are heard from where that player is. Esc leaves the game and the others play on.
+With ``-foodrespawn [seconds]`` (Food comes back in IPXSETUP; player
+1's choice) the food, dog food and first aid kits that are picked up
+come back after that long (30 seconds if not given); ammo, guns and
+treasure don't.
 A player who goes quiet (the machine crashed, the network went) is
 dropped after 8 seconds and the others play on. A free slot (somebody
 left or was dropped) can be taken again by running the same command
@@ -103,7 +107,8 @@ Bots: ``-bots N`` (Bots in IPXSETUP; the game starter's choice, up to
 14) brings N bots into a deathmatch, in SS uniforms of each one's color
 (even when the others are BJ), named "Hans (bot)" and so on. They hunt
 the nearest player, open doors, find their way round the map and come
-back when killed. ``-botskill`` (Bot skill in IPXSETUP) says how good:
+back when killed. Hurt ones go for the nearest food or first aid (very
+hurt, rather than fight), and low on ammo, for ammo. ``-botskill`` (Bot skill in IPXSETUP) says how good:
 0 easy (they walk, look where they're going, are slow on the trigger,
 miss a lot and shoot in short bursts), 1 normal (the default), 2 hard,
 3 vicious (they see all round, always know where you are, aim well and

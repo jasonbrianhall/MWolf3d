@@ -356,6 +356,10 @@ static const int fragcounts[NUMFRAGS] = {0,5,10,15,20,25,30,50,100};
 static int		net_fraglimit = 20;
 static int		net_bots;						// deathmatch: -bots N
 static int		net_botskill = 1;				// -botskill 0-3
+#define NUMFOOD		4
+static const char *foodnames[NUMFOOD] = {"Never","After 30 s","After 60 s","After 2 min"};
+static const int foodseconds[NUMFOOD] = {0,30,60,120};
+static int		net_food;						// co-op: foodseconds[] (-foodrespawn)
 static const char *botskillnames[] = {"Easy","Normal","Hard","Vicious"};
 static int		net_frags = 4;					// fragnames[]: 20
 
@@ -392,6 +396,8 @@ static void LoadNet (void)
 		net_bots = 0;
 	if (fscanf (f," botskill=%d",&net_botskill) != 1 || net_botskill < 0 || net_botskill > 3)
 		net_botskill = 1;
+	if (fscanf (f," foodrespawn=%d",&net_food) != 1 || net_food < 0 || net_food >= NUMFOOD)
+		net_food = 0;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -424,6 +430,7 @@ static void SaveNet (void)
 		fprintf (f,"fraglimit=%d\n",net_fraglimit);
 		fprintf (f,"bots=%d\n",net_bots);
 		fprintf (f,"botskill=%d\n",net_botskill);
+		fprintf (f,"foodrespawn=%d\n",net_food);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -1385,7 +1392,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4],fd[8];
 	const char *args[32];
 	int		n,act;
 	field_t	f[] =
@@ -1397,6 +1404,7 @@ static void NetworkScreen (int standalone)
 		{F_NUMBER,"Level",0,1,21,0,0,&net_level},
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
 		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
+		{F_CHOICE,"Food comes back (co-op)",0,0,NUMFOOD-1,foodnames,0,&net_food},
 		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
@@ -1416,9 +1424,9 @@ static void NetworkScreen (int standalone)
 	for (;;)
 	{
 #ifdef __linux__
-		act = Form ("Network game",f,16,&cursor,
+		act = Form ("Network game",f,17,&cursor,
 #else
-		act = Form ("Network game (IPX)",f,14,&cursor,
+		act = Form ("Network game (IPX)",f,15,&cursor,
 #endif
 			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
@@ -1464,6 +1472,11 @@ static void NetworkScreen (int standalone)
 		args[n++] = "-skill"; args[n++] = sk;
 		if (!net_ff && !net_dm)
 			args[n++] = "-nofriendlyfire";
+		if (net_food && !net_dm)
+		{
+			sprintf (fd,"%d",foodseconds[net_food]);
+			args[n++] = "-foodrespawn"; args[n++] = fd;
+		}
 #ifdef __linux__
 		if (net_ipx == 4)
 			args[n++] = "-tcpserver";
