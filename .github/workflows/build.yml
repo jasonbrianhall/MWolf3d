@@ -128,6 +128,8 @@ jobs:
                      everybody's. -host / -join: only start / only join.
                      -monsters: keep the map's enemies; they come back
                      1-2 minutes after they're killed.
+                     -bots N: N bots join too (in SS uniforms; IPXSETUP:
+                     Bots), and leave to make room for players.
 
           Version:   ${VERSION}
           Built from: ${GITHUB_REPOSITORY}@${GITHUB_SHA}
@@ -238,6 +240,7 @@ jobs:
                      leave) whenever they like. Everyone has every weapon
                      and both keys, no enemies, the exit is shut; SCORE is
                      your frags, Tab shows everybody's.
+                     -bots N adds N bots (in SS uniforms).
           Network:   UDP port 27135 on the local network; -port N for
                      another, -connect host[:port] for a game elsewhere.
                      Or TCP through a server (for the internet):
