@@ -118,6 +118,7 @@ jobs:
                      without it, recolored SS guards). The respawn sound is
                      RESPAWN.WAD, Freedoom's teleport sound (FREEDOOM.TXT).
                      Friendly fire is on unless -nofriendlyfire.
+                     -foodrespawn [seconds]: eaten food comes back.
                      Esc leaves the game. T: chat (Enter sends); while
                      typing, Alt+1..Alt+0 send the macros SETUP edits.
           Deathmatch: WOLF3D -deathmatch -name YOURNAME (or IPXSETUP's
@@ -236,6 +237,7 @@ jobs:
                      the network game menu (co-op / deathmatch, your
                      name, where to connect). Both take -data DIR.
           Co-op:     ./wolf3d -nodes 2 [-episode 1] [-level 1] [-skill 2]
+                     (-foodrespawn [seconds]: eaten food comes back)
           Deathmatch: ./wolf3d -deathmatch -name YOURNAME
                      The first one starts the game, the others join (and
                      leave) whenever they like. Everyone has every weapon
