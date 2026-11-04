@@ -354,6 +354,7 @@ static const char *fragnames[NUMFRAGS] =
 	"50 frags","100 frags"};
 static const int fragcounts[NUMFRAGS] = {0,5,10,15,20,25,30,50,100};
 static int		net_fraglimit = 20;
+static int		net_bots;						// deathmatch: -bots N
 static int		net_frags = 4;					// fragnames[]: 20
 
 static void LoadNet (void)
@@ -385,6 +386,8 @@ static void LoadNet (void)
 		net_timelimit = 30;
 	if (fscanf (f," fraglimit=%d",&net_fraglimit) != 1 || net_fraglimit < 0 || net_fraglimit > 999)
 		net_fraglimit = 20;
+	if (fscanf (f," bots=%d",&net_bots) != 1 || net_bots < 0 || net_bots > 14)
+		net_bots = 0;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -415,6 +418,7 @@ static void SaveNet (void)
 		fprintf (f,"connect=%s\n",net_connect[0] ? net_connect : "-");
 		fprintf (f,"timelimit=%d\n",net_timelimit);
 		fprintf (f,"fraglimit=%d\n",net_fraglimit);
+		fprintf (f,"bots=%d\n",net_bots);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -1376,7 +1380,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8];
 	const char *args[32];
 	int		n,act;
 	field_t	f[] =
@@ -1391,6 +1395,7 @@ static void NetworkScreen (int standalone)
 		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
+		{F_NUMBER,"Bots (deathmatch)",0,0,14,0,0,&net_bots},
 #ifdef __linux__
 		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
@@ -1405,9 +1410,9 @@ static void NetworkScreen (int standalone)
 	for (;;)
 	{
 #ifdef __linux__
-		act = Form ("Network game",f,14,&cursor,
+		act = Form ("Network game",f,15,&cursor,
 #else
-		act = Form ("Network game (IPX)",f,12,&cursor,
+		act = Form ("Network game (IPX)",f,13,&cursor,
 #endif
 			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
@@ -1433,6 +1438,11 @@ static void NetworkScreen (int standalone)
 				args[n++] = "-monsters";
 			args[n++] = "-timelimit"; args[n++] = tl;
 			args[n++] = "-fraglimit"; args[n++] = fl;
+			if (net_bots)
+			{
+				sprintf (bt,"%d",net_bots);
+				args[n++] = "-bots"; args[n++] = bt;
+			}
 		}
 		else
 		{

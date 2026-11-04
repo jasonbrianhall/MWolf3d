@@ -92,6 +92,8 @@ typedef struct
 } __attribute__((packed)) netcmd_t;
 
 #define EV_JOIN		0x80
+#define EV_BOT		0x40		// with EV_JOIN: the newcomer's a bot
+#define EV_LEAVE	0x20		// in a bot's own controls: it goes, after this frame
 
 #define DMAMMO		50			// ammo after a deathmatch (re)spawn
 #define DMITEMTICS	(70*30)		// a picked up item comes back after this
@@ -140,6 +142,7 @@ typedef struct
 
 	// not swapped
 	boolean	dead,removed;
+	boolean	bot;				// deathmatch: the arbiter's machine works its controls out
 	int		respawn;
 	long	spawnx,spawny;
 	int		spawnangle;
@@ -1557,17 +1560,23 @@ static void Tint (int p, int l, int *r, int *g, int *b)
 	if (*b > 63) *b = 63;
 }
 
+static	byte	sscolors[MAXPLAYERS][256];	// the SS uniform's (bots, when BJ is the players')
+
 static void MakeColors (void)
 {
-	int		p,c,i,r,g,b,nr,ng,nb,best,bestd,d,dr,dg,db;
-	byte	*pal = gamepal;
+	int		p,c,i,r,g,b,nr,ng,nb,best,bestd,d,dr,dg,db,pass;
+	byte	*pal = gamepal,(*table)[256];
+	boolean	pf;
 
+	for (pass=0;pass<2;pass++)
 	for (p=0;p<MAXPLAYERS;p++)
 		for (c=0;c<256;c++)
 		{
-			netcolors[p][c] = c;
+			pf = pass == 0 && pfloaded;
+			table = pass == 0 ? netcolors : sscolors;
+			table[p][c] = c;
 			r = pal[c*3]; g = pal[c*3+1]; b = pal[c*3+2];
-			if (pfloaded)
+			if (pf)
 			{
 				// BJ's gold vest
 				if (!pfteam[c])
@@ -1598,7 +1607,7 @@ static void MakeColors (void)
 			bestd = 0x7fffffff;
 			for (i=0;i<255;i++)
 			{
-				if (pfloaded && pfteam[i] && p != 2)
+				if (pf && pfteam[i] && p != 2)
 					continue;			// not back to gold
 				dr = pal[i*3]-nr; dg = pal[i*3+1]-ng; db = pal[i*3+2]-nb;
 				d = dr*dr*3 + dg*dg*4 + db*db*2;
@@ -1608,13 +1617,13 @@ static void MakeColors (void)
 					best = i;
 				}
 			}
-			netcolors[p][c] = best;
+			table[p][c] = best;
 		}
 	netcolorsmade = true;
 }
 
 // a copy of a shape with exactly the pixels the scaler reads recolored
-static byte *Recolor (byte *orig, unsigned length, int p)
+static byte *Recolor (byte *orig, unsigned length, byte *colors)
 {
 	int		col,src,end,start;
 	byte	*copy;
@@ -1635,7 +1644,7 @@ static byte *Recolor (byte *orig, unsigned length, int p)
 			top = cmd[1];
 			start = cmd[2]/2;
 			for (src=start;src<end;src++)
-				copy[(word)(top+src)] = netcolors[p][orig[(word)(top+src)]];
+				copy[(word)(top+src)] = colors[orig[(word)(top+src)]];
 			cmd += 3;
 		}
 	}
@@ -1657,7 +1666,7 @@ memptr NetShape (int shapenum)
 	{
 		frame -= PFFRAME;
 		if (!pfshapes[p][frame])
-			pfshapes[p][frame] = Recolor (pfframe[frame],pflength[frame],p);
+			pfshapes[p][frame] = Recolor (pfframe[frame],pflength[frame],netcolors[p]);
 		return pfshapes[p][frame] ? pfshapes[p][frame] : pfframe[frame];
 	}
 
@@ -1669,7 +1678,7 @@ memptr NetShape (int shapenum)
 		return copy;
 
 	page = PMSpriteStart + frame;
-	copy = Recolor (PM_GetPage (page),PMPages[page].length,p);
+	copy = Recolor (PM_GetPage (page),PMPages[page].length,sscolors[p]);
 	if (!copy)
 		return PM_GetPage (page);
 	netshapes[p][frame-SPR_SS_S_1] = copy;
@@ -1691,6 +1700,7 @@ memptr NetShape (int shapenum)
 int NetPlayerShape (objtype *ob)
 {
 	int			i,angle,viewangle,frame,wf;
+	boolean		bj;
 	netplayer_t	*p;
 
 	for (i=0;i<numplayers;i++)
@@ -1702,10 +1712,11 @@ int NetPlayerShape (objtype *ob)
 
 	if (!pftried)
 		LoadPlayerSprites ();
+	bj = pfloaded && !p->bot;			// (bots are always in SS uniforms)
 
 	if (p->dead)
 	{
-		if (pfloaded)
+		if (bj)
 			frame = p->respawn < 24 ? PFFRAME+PF_DIE1+p->respawn/6 : PFFRAME+PF_DEAD;
 		else if (p->respawn < 8)
 			frame = SPR_SS_DIE_1;
@@ -1729,7 +1740,7 @@ int NetPlayerShape (objtype *ob)
 
 	wf = i == netcontext ? gamestate.weaponframe : p->weaponframe;
 
-	if (pfloaded)
+	if (bj)
 	{
 		// BJ aims and fires in every direction, not only at us
 		if (p->pain)
@@ -2109,9 +2120,9 @@ static char *AddrStr (byte *a)
 */
 
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop,
-	pk_ping,pk_pong};
+	pk_ping,pk_pong,pk_bottics};
 
-#define NETVERSION	7
+#define NETVERSION	8
 
 typedef struct
 {
@@ -2146,6 +2157,20 @@ typedef struct
 	joinrec_t join;
 	netcmd_t cmds[NETBACKUP];
 } __attribute__((packed)) ticpacket_t;
+
+// the bots' controls, from the machine that works them out (the arbiter):
+// for each bot its slot, how far after first its controls start, how
+// many, and the controls; as many bots as fit
+#define BOTBACKUP	4			// frames of each bot's controls in a packet
+
+typedef struct
+{
+	byte	magic[2];
+	byte	type,host;			// host: the sender
+	byte	seq,nbots,pad[2];
+	long	first;
+	byte	data[PKTMAX-12];
+} __attribute__((packed)) botpacket_t;
 
 // deathmatch: is there a game? (any player answers, with the arbiter)
 typedef struct
@@ -2311,10 +2336,12 @@ static int Arbiter (void)
 	int i;
 
 	for (i=0;i<numplayers;i++)
-		if (!np[i].removed)
+		if (!np[i].removed && !np[i].bot)
 			return i;
 	return localplayer;
 }
+
+static	void	SendBotTics (void);
 
 static void SendTics (int type)
 {
@@ -2350,7 +2377,7 @@ static void SendTics (int type)
 
 	len = sizeof(pk)-sizeof(pk.cmds)+pk.count*sizeof(netcmd_t);
 	for (i=0;i<numplayers;i++)
-		if (i != localplayer && !np[i].gone)
+		if (i != localplayer && !np[i].gone && !np[i].bot)
 		{
 			IPXSend (i,np[i].addr,&pk,len);
 			if (dropannounce)
@@ -2358,6 +2385,652 @@ static void SendTics (int type)
 		}
 	if (dropannounce)
 		dropannounce--;
+	SendBotTics ();
+}
+
+
+/*
+=============================================================================
+
+						 BOTS
+
+ Deathmatch bots (-bots N): a bot is a player like the others, in a slot,
+ but nobody's machine samples its controls: the arbiter's works them out
+ (BotThink) and sends them round like a player's own (pk_bottics), and
+ every machine plays them back. So only the arbiter runs the brain, which
+ needn't come out the same anywhere else (its own random numbers, never
+ US_RndT). The arbiter brings bots in with a join event in its own
+ controls (EV_BOT), up to -bots of them and never filling the last slot
+ (a newcomer's); one goes (EV_LEAVE in its controls) when a newcomer
+ finds the game full.
+
+ When the arbiter goes, the next one takes over the bots' controls after
+ its last frame (BotHost): what it sent for later frames is thrown away,
+ and the new one works them out from there.
+
+=============================================================================
+*/
+
+static	int		dmbots;				// how many bots (the starter's -bots)
+static	byte	cmdsender[MAXPLAYERS][NETRING];	// a bot's controls: who sent them
+static	long	botleave[MAXPLAYERS];		// the frame it leaves after (-1: not)
+static	boolean	botkick[MAXPLAYERS];		// leave at the next frame worked out
+static	long	slotreserved[MAXPLAYERS];	// a join event's frame, till it's run
+
+static char *botnames[MAXPLAYERS] =
+{
+	"Hans","Fritz","Klaus","Otto","Dieter","Karl","Ernst","Heinz",
+	"Kurt","Gunther","Rolf","Bruno","Horst","Erich","Max","Willi"
+};
+
+typedef struct
+{
+	int		target;				// the player it's after (-1: nobody)
+	int		seen;				// frames it has had the target in sight
+	int		wayx,wayy;			// the next tile on its way (-1: work it out)
+	int		fromx,fromy;		// the tile it worked that out on
+	int		repath;				// frames till it works the way out again
+	int		roamx,roamy;		// nobody to go for: somewhere to go
+	long	lastx,lasty;
+	int		stuck;				// frames it hasn't got anywhere
+	int		unstick;			// frames left of getting out of it
+	int		unstickturn;
+	int		wobble,wobbletime;	// aim off by this much, for this long
+	int		usetime;
+} botbrain_t;
+
+static	botbrain_t brain[MAXPLAYERS];
+static	unsigned long botseed = 0x5eed;
+
+static int BotRand (void)		// 0-255: the brain's own, not the game's
+{
+	botseed = botseed*1103515245 + 12345;
+	return (botseed >> 16) & 255;
+}
+
+static void BotReset (int k)
+{
+	memset (&brain[k],0,sizeof(brain[k]));
+	brain[k].target = -1;
+	brain[k].wayx = -1;
+	brain[k].roamx = -1;
+}
+
+//
+// BotHost: whose machine works the bots' controls for frame f out: the
+// lowest numbered player (not a bot) in the game at f
+//
+static int BotHost (long f)
+{
+	int i;
+
+	for (i=0;i<numplayers;i++)
+		if (!np[i].bot && !np[i].removed && !(np[i].gone && f > np[i].lastframe))
+			return i;
+	return -1;
+}
+
+// a free slot (not one a join event is on its way into)
+static int FreeSlot (void)
+{
+	int i;
+
+	for (i=0;i<numplayers;i++)
+		if (np[i].removed && np[i].gone && slotreserved[i] < netframe)
+			return i;
+	return -1;
+}
+
+//
+// BotsLeftBy: player p went after lastframe: the bots' controls it sent
+// for later frames are no good (the next host's count)
+//
+static void BotsLeftBy (int p, long lastframe)
+{
+	int b,r;
+
+	if (np[p].bot)
+		return;
+	for (b=0;b<numplayers;b++)
+		if (b != p)
+			for (r=0;r<NETRING;r++)
+				if (cmdsender[b][r] == p && np[b].cmdframe[r] > lastframe)
+					np[b].cmdframe[r] = -1;
+}
+
+// floor a bot can walk (doors too)
+static boolean BotFloor (int x, int y)
+{
+	if (!DMFloor (x,y))
+		return false;
+	return (uintptr_t)actorat[x][y] != 1;		// (a blocking item)
+}
+
+//
+// BotSight: nothing in the way from a to b (walls, shut doors)
+//
+static boolean BotSight (objtype *a, objtype *b)
+{
+	long	dx,dy,x,y;
+	int		n,i,t,tx,ty;
+
+	dx = b->x - a->x;
+	dy = b->y - a->y;
+	n = (labs (dx) > labs (dy) ? labs (dx) : labs (dy)) / 0x4000 + 1;
+	for (i=1;i<n;i++)
+	{
+		x = a->x + dx*i/n;
+		y = a->y + dy*i/n;
+		tx = x >> TILESHIFT;
+		ty = y >> TILESHIFT;
+		if (tx < 0 || ty < 0 || tx >= MAPSIZE || ty >= MAPSIZE)
+			return false;
+		t = tilemap[tx][ty];
+		if (t & 0x80)
+		{
+			if (doorposition[t & 0x7f] < 0x8000)
+				return false;
+		}
+		else if (t)
+			return false;
+	}
+	return true;
+}
+
+//
+// BotPath: the next tile on the shortest way from s to g (false: none)
+//
+static boolean BotPath (int sx, int sy, int gx, int gy, int *wx, int *wy)
+{
+	static	byte	from[MAPSIZE][MAPSIZE];		// how it was got to: 1+dir, 0 not yet
+	static	word	queue[MAPSIZE*MAPSIZE];
+	static	int		ddx[4] = {1,0,-1,0}, ddy[4] = {0,-1,0,1};
+	int		head,tail,x,y,d,nx,ny,px,py;
+
+	if (sx == gx && sy == gy)
+	{
+		*wx = gx;
+		*wy = gy;
+		return true;
+	}
+	memset (from,0,sizeof(from));
+	head = tail = 0;
+	queue[tail++] = sx*MAPSIZE+sy;
+	from[sx][sy] = 5;
+	while (head < tail && !from[gx][gy])
+	{
+		x = queue[head] / MAPSIZE;
+		y = queue[head] % MAPSIZE;
+		head++;
+		for (d=0;d<4;d++)
+		{
+			nx = x+ddx[d];
+			ny = y+ddy[d];
+			if (nx < 0 || ny < 0 || nx >= MAPSIZE || ny >= MAPSIZE || from[nx][ny])
+				continue;
+			if (!BotFloor (nx,ny) && !(nx == gx && ny == gy))
+				continue;
+			from[nx][ny] = d+1;
+			queue[tail++] = nx*MAPSIZE+ny;
+		}
+	}
+	if (!from[gx][gy])
+		return false;
+
+	// back from the goal to the tile after the start
+	x = gx;
+	y = gy;
+	for (;;)
+	{
+		d = from[x][y]-1;
+		px = x-ddx[d];
+		py = y-ddy[d];
+		if (px == sx && py == sy)
+			break;
+		x = px;
+		y = py;
+	}
+	*wx = x;
+	*wy = y;
+	return true;
+}
+
+// the way from the angle we face to want: -180..179
+static int AngleDiff (int want, int angle)
+{
+	int d = want - angle;
+
+	while (d >= ANGLES/2)
+		d -= ANGLES;
+	while (d < -ANGLES/2)
+		d += ANGLES;
+	return d;
+}
+
+// turn toward want (at most maxturn degrees a frame)
+static int BotTurn (netcmd_t *cmd, int diff, int maxturn)
+{
+	if (diff > maxturn)
+		diff = maxturn;
+	if (diff < -maxturn)
+		diff = -maxturn;
+	cmd->x = -diff*20;			// (ANGLESCALE: controlx turns the other way)
+	return diff;
+}
+
+//
+// BotThink: bot k's controls for frame f, from the game as it is (the
+// frames before f still to come, with the turns it's already asked for)
+//
+static void BotThink (int k, long f, netcmd_t *cmd)
+{
+	netplayer_t *p = &np[k];
+	objtype	*ob = p->ob,*t;
+	botbrain_t *b = &brain[k];
+	int		i,best,vis,bestvis,want,diff,tol,react,maxturn,skill,tx,ty,door,angle;
+	long	d,bestd,dx,dy,dist,g;
+	boolean	go,knife;
+
+	memset (cmd,0,sizeof(*cmd));
+	if (dmtimeup || !ob)
+		return;
+
+	// where it'll be facing when these controls come in
+	angle = ob->angle;
+	for (g=netframe;g<f;g++)
+		if (np[k].cmdframe[g & (NETRING-1)] == g)
+			angle -= np[k].cmds[g & (NETRING-1)].x/20;
+	while (angle < 0)
+		angle += ANGLES;
+	while (angle >= ANGLES)
+		angle -= ANGLES;
+
+	if (p->dead)
+	{
+		if (BotRand () & 1)
+			cmd->buttons |= 1<<bt_attack;		// back in
+		b->target = -1;
+		b->seen = 0;
+		b->wayx = -1;
+		return;
+	}
+
+	skill = gamestate.difficulty;			// (-skill: how good the bots are)
+	react = 16 - 3*skill;					// frames from seeing to shooting
+	maxturn = 5 + skill*2;					// degrees a frame
+
+	//
+	// the best gun it has
+	//
+	knife = p->weapon == wp_knife;
+	if (p->ammo > 0 && p->bestweapon > p->weapon && (BotRand () & 7) == 0)
+		cmd->buttons |= 1<<(bt_readyknife+p->bestweapon);
+
+	//
+	// who to go for: the nearest one in sight, else the nearest
+	//
+	best = -1;
+	bestvis = 0;
+	bestd = 0x7fffffffl;
+	for (i=0;i<numplayers;i++)
+	{
+		if (i == k || np[i].removed || np[i].dead || !np[i].ob)
+			continue;
+		dx = labs (np[i].ob->x - ob->x);
+		dy = labs (np[i].ob->y - ob->y);
+		d = dx > dy ? dx : dy;
+		vis = BotSight (ob,np[i].ob);
+		if (i == b->target && vis)
+			d -= 0x20000;					// (rather the one it's on)
+		if ((vis && !bestvis) || (vis == bestvis && d < bestd))
+		{
+			best = i;
+			bestd = d;
+			bestvis = vis;
+		}
+	}
+	if (best != b->target)
+		b->seen = 0;
+	b->target = best;
+	if (bestvis)
+		b->seen++;
+	else
+		b->seen = 0;
+
+	if (--b->wobbletime <= 0)
+	{
+		b->wobbletime = 12 + (BotRand () & 15);
+		i = 4 - skill;
+		b->wobble = (int)(BotRand () % (2*i+1)) - i;
+	}
+
+	go = false;
+	want = angle;
+
+	//
+	// getting out of a corner it's stuck in
+	//
+	if (b->unstick > 0)
+	{
+		b->unstick--;
+		BotTurn (cmd,b->unstickturn,maxturn);
+		cmd->y = b->unstick > 10 ? 60 : -140;	// back off, then on
+		if (b->unstick & 1)
+			cmd->buttons |= 1<<bt_use;
+		b->wayx = -1;
+		b->lastx = ob->x;
+		b->lasty = ob->y;
+		return;
+	}
+
+	if (bestvis)
+	{
+		//
+		// in sight: turn on it, shoot, close in
+		//
+		t = np[best].ob;
+		dx = t->x - ob->x;
+		dy = t->y - ob->y;
+		dist = labs (dx) > labs (dy) ? labs (dx) : labs (dy);
+		want = NetAngle (dx,-dy) + b->wobble;
+		diff = AngleDiff (want,angle);
+		BotTurn (cmd,diff,maxturn);
+
+		tol = 3 + (int)((16l*0x10000)/(dist+0x20000));
+		if (b->seen >= react && abs (diff) <= tol && (!knife || dist < 0x18000))
+			cmd->buttons |= 1<<bt_attack;
+
+		if (knife || dist > 5*TILEGLOBAL)
+			cmd->y = -140;					// in on it
+		else if (dist < 2*TILEGLOBAL)
+			cmd->y = 40;					// not too close
+		b->wayx = -1;
+		go = cmd->y < 0;
+	}
+	else
+	{
+		//
+		// out of sight: the way there (or somewhere to go)
+		//
+		if (best >= 0)
+		{
+			tx = np[best].ob->tilex;
+			ty = np[best].ob->tiley;
+		}
+		else
+		{
+			if (b->roamx < 0 || (ob->tilex == b->roamx && ob->tiley == b->roamy))
+			{
+				if (numdmspots)
+				{
+					i = (BotRand ()*256 + BotRand ()) % numdmspots;
+					b->roamx = dmspots[i][0];
+					b->roamy = dmspots[i][1];
+				}
+				else
+				{
+					b->roamx = ob->tilex;
+					b->roamy = ob->tiley;
+				}
+			}
+			tx = b->roamx;
+			ty = b->roamy;
+		}
+
+		if (b->wayx < 0 || ob->tilex != b->fromx || ob->tiley != b->fromy || --b->repath <= 0)
+		{
+			b->fromx = ob->tilex;
+			b->fromy = ob->tiley;
+			b->repath = 20;
+			if (!BotPath (ob->tilex,ob->tiley,tx,ty,&b->wayx,&b->wayy))
+			{
+				b->wayx = -1;
+				b->roamx = -1;				// somewhere else, then
+			}
+		}
+
+		if (b->wayx >= 0)
+		{
+			dx = ((long)b->wayx << TILESHIFT) + TILEGLOBAL/2 - ob->x;
+			dy = ((long)b->wayy << TILESHIFT) + TILEGLOBAL/2 - ob->y;
+			want = NetAngle (dx,-dy);
+			diff = AngleDiff (want,angle);
+			BotTurn (cmd,diff,maxturn);
+			if (abs (diff) < 50)
+			{
+				cmd->y = abs (diff) < 20 ? -140 : -60;
+				go = true;
+			}
+
+			// a shut door on the way: open it
+			door = tilemap[b->wayx][b->wayy];
+			if ((door & 0x80) && doorobjlist[door & 0x7f].action != dr_open
+			&& abs (diff) < 30 && --b->usetime <= 0)
+			{
+				cmd->buttons |= 1<<bt_use;
+				b->usetime = 6;
+			}
+		}
+	}
+
+	//
+	// not getting anywhere: back off, turn, try again
+	//
+	if (go && labs (ob->x - b->lastx) + labs (ob->y - b->lasty) < 0x400)
+	{
+		if (++b->stuck > 25)
+		{
+			b->stuck = 0;
+			b->unstick = 18;
+			b->unstickturn = (BotRand () & 1) ? 90 : -90;
+		}
+	}
+	else
+		b->stuck = 0;
+	b->lastx = ob->x;
+	b->lasty = ob->y;
+}
+
+//
+// BotFill: our machine works the bots' controls out (the frames it's the
+// host for, up to frame last, that nobody's sent): how many it did
+//
+static int BotFill (long last)
+{
+	long	f;
+	int		k,r,n = 0;
+
+	for (k=0;k<numplayers;k++)
+	{
+		if (!np[k].bot || np[k].removed || np[k].gone)
+			continue;
+		for (f=netframe;f<=last;f++)
+		{
+			if (f < NETDELAY || f < np[k].firstcmd)
+				continue;
+			if (botleave[k] >= 0 && f > botleave[k])
+				break;
+			r = f & (NETRING-1);
+			if (np[k].cmdframe[r] == f || BotHost (f) != localplayer)
+				continue;
+			BotThink (k,f,&np[k].cmds[r]);
+			if (botkick[k])
+			{
+				np[k].cmds[r].event = EV_LEAVE;		// to make room
+				botleave[k] = f;
+				botkick[k] = false;
+			}
+			np[k].cmdframe[r] = f;
+			cmdsender[k][r] = localplayer;
+			n++;
+		}
+	}
+	return n;
+}
+
+//
+// SendBotTics: the controls of the bots we're the host for, to the others
+// (with SendTics)
+//
+static void SendBotTics (void)
+{
+	botpacket_t pk;
+	int		k,i,len,n,skip;
+	long	f,first,start = 0;
+	byte	*d;
+
+	if (!deathmatch)
+		return;
+	for (i=0;i<numplayers;i++)			// (the next host, when the last went early)
+		if (!np[i].bot && !np[i].removed && !np[i].gone)
+			break;
+	if (BotHost (maketic-1) != localplayer && i != localplayer)
+		return;
+	first = maketic - BOTBACKUP;
+	if (first < NETDELAY)
+		first = NETDELAY;
+
+	memset (&pk,0,sizeof(pk));
+	pk.magic[0] = 'W'; pk.magic[1] = '3';
+	pk.type = pk_bottics;
+	pk.host = localplayer;
+	pk.seq = levelseq;
+	pk.first = first;
+	d = pk.data;
+
+	for (k=0;k<=numplayers;k++)
+	{
+		if (k < numplayers)
+		{
+			if (!np[k].bot || np[k].removed)
+				continue;
+			// the run of its controls up to the last one we have
+			start = maketic;
+			for (f=maketic-1;f>=first && f>=np[k].firstcmd;f--)
+			{
+				if (np[k].cmdframe[f & (NETRING-1)] != f)
+					break;
+				start = f;
+			}
+			n = maketic-start;
+			if (!n)
+				continue;
+		}
+		else
+			n = 0;
+
+		// full (or the end): out it goes
+		if (k == numplayers || d+3+n*sizeof(netcmd_t) > pk.data+sizeof(pk.data))
+		{
+			if (pk.nbots)
+			{
+				len = d - (byte *)&pk;
+				for (i=0;i<numplayers;i++)
+					if (i != localplayer && !np[i].gone && !np[i].bot)
+						IPXSend (i,np[i].addr,&pk,len);
+			}
+			pk.nbots = 0;
+			d = pk.data;
+			if (k == numplayers)
+				break;
+		}
+
+		skip = start-first;
+		*d++ = k;
+		*d++ = skip;
+		*d++ = n;
+		for (f=start;f<maketic;f++)
+		{
+			memcpy (d,&np[k].cmds[f & (NETRING-1)],sizeof(netcmd_t));
+			d += sizeof(netcmd_t);
+		}
+		pk.nbots++;
+	}
+}
+
+static void ReceiveBotTics (byte *buf, int len)
+{
+	botpacket_t *pk = (botpacket_t *)buf;
+	byte	*d,*end;
+	int		h,k,skip,n,i,r;
+	long	f;
+
+	if (len < 12 || pk->host >= numplayers || pk->host == localplayer || np[pk->host].bot)
+		return;
+	h = pk->host;
+	if (pk->seq != levelseq)
+	{
+		if (pk->seq == oldseq)
+			SendTics (pk_tics);			// it's waiting for us to finish
+		return;
+	}
+	d = pk->data;
+	end = buf+len;
+	for (i=0;i<pk->nbots && d+3 <= end;i++)
+	{
+		k = *d++;
+		skip = *d++;
+		n = *d++;
+		if (k >= numplayers || k == localplayer || n > BOTBACKUP+2 || d+n*sizeof(netcmd_t) > end)
+			return;
+		for (f=pk->first+skip ; n-- ; f++,d+=sizeof(netcmd_t))
+		{
+			r = f & (NETRING-1);
+			if (np[k].cmdframe[r] == f)
+				continue;				// had it (the first word counts)
+			if (np[h].gone && f > np[h].lastframe)
+				continue;				// not its to say any more
+			memcpy (&np[k].cmds[r],d,sizeof(netcmd_t));
+			np[k].cmdframe[r] = f;
+			cmdsender[k][r] = h;
+		}
+	}
+}
+
+//
+// BotManage: the arbiter brings a bot in now and then, till there are
+// -bots of them (never into the last free slot: that's a newcomer's)
+//
+static void BotManage (void)
+{
+	netcmd_t *c = &np[localplayer].cmds[maketic & (NETRING-1)];
+	int		i,bots,players,slot;
+
+	if (!deathmatch || !dmbots || dmtimeup || dmendframe >= 0 || c->event
+	|| pending.active || Arbiter () != localplayer || maketic % (FRAMESASEC/2))
+		return;
+	bots = players = 0;
+	for (i=0;i<numplayers;i++)
+		if (!np[i].removed || slotreserved[i] >= netframe)
+		{
+			players++;
+			if (np[i].bot)
+				bots++;
+		}
+	if (bots >= dmbots || players >= numplayers-1)
+		return;
+	slot = FreeSlot ();
+	if (slot < 0)
+		return;
+	c->event = EV_JOIN | EV_BOT | slot;
+	slotreserved[slot] = maketic;
+}
+
+// a newcomer wants in and it's full: the last bot goes (true: one will)
+static boolean BotMakeRoom (void)
+{
+	int i;
+
+	for (i=numplayers-1;i>=0;i--)
+		if (np[i].bot && !np[i].removed && !np[i].gone && botleave[i] < 0)
+		{
+			botkick[i] = true;
+			return true;
+		}
+	for (i=0;i<numplayers;i++)
+		if (np[i].bot && !np[i].removed && (botkick[i] || botleave[i] >= 0))
+			return true;				// one's going already
+	return false;
 }
 
 //
@@ -2385,7 +3058,7 @@ static void SendPings (void)
 	pk.player = localplayer;
 	pk.time = NetMillis ();
 	for (i=0;i<numplayers;i++)
-		if (i != localplayer && !np[i].gone)
+		if (i != localplayer && !np[i].gone && !np[i].bot)
 			IPXSend (i,np[i].addr,&pk,sizeof(pk));
 }
 
@@ -2554,7 +3227,7 @@ static void SendChat (char *text)
 	strncpy (pk.text,text,CHATLEN);
 	pk.len = len = strlen (pk.text);
 	for (i=0;i<numplayers;i++)
-		if (i != localplayer && !np[i].gone)
+		if (i != localplayer && !np[i].gone && !np[i].bot)
 		{
 			IPXSend (i,np[i].addr,&pk,sizeof(pk)-sizeof(pk.text)+len+1);
 			IPXSend (i,np[i].addr,&pk,sizeof(pk)-sizeof(pk.text)+len+1);
@@ -2830,6 +3503,8 @@ static char *PingStr (int p)
 
 	if (p == localplayer)
 		return "";
+	if (np[p].bot)
+		return "bot";
 	if (!haveping[p])
 		return "--";
 	sprintf (str,"%ld ms",pingms[p]);
@@ -2845,7 +3520,7 @@ static void DrawPings (void)
 	y = 2;
 	for (i=0;i<numplayers;i++)
 	{
-		if (i == localplayer || np[i].removed || y > viewheight-12)
+		if (i == localplayer || np[i].removed || np[i].bot || y > viewheight-12)
 			continue;
 		ps = PingStr (i);
 		c = !haveping[i] ? 7 : pingms[i] < 120 ? 10 : pingms[i] < 250 ? 14 : 12;
@@ -2902,6 +3577,7 @@ static void PlayerLeft (int p, long lastframe)
 		return;
 	np[p].gone = true;
 	haveping[p] = false;
+	BotsLeftBy (p,lastframe);
 	sprintf (str,"%s left the game",NetName (p));
 	AddChatLine (str,7);
 	np[p].lastframe = lastframe;
@@ -3086,7 +3762,7 @@ static long Unpack (byte *in, long len, byte *out, long max)
 	F(gotgatgun) F(facecount) F(playerxmove) F(playerymove) F(controlx) \
 	F(controly) F(dead) F(removed) F(respawn) F(spawnx) F(spawny) \
 	F(spawnangle) F(anim) F(moving) F(pain) F(gone) F(lastframe) F(firstcmd) \
-	F(frags) F(deaths)
+	F(frags) F(deaths) F(bot)
 
 static void PutPlayer (netplayer_t *p)
 {
@@ -3235,6 +3911,7 @@ static long WriteGame (byte *buf, int slot)
 	SnapPutLong (dmtimelimit);
 	SnapPutLong (dmfraglimit);
 	SnapPutLong (dmendframe);
+	SnapPutLong (dmbots);
 
 	return sp - buf;
 }
@@ -3366,6 +4043,7 @@ static boolean ReadGame (byte *buf, long len)
 	dmtimelimit = SnapGetLong ();
 	dmfraglimit = SnapGetLong ();
 	dmendframe = SnapGetLong ();
+	dmbots = SnapGetLong ();
 	dmtimeup = dmendframe >= 0;
 
 	localplayer = slot;
@@ -3505,13 +4183,9 @@ static void ReceiveJoin (joinpacket_t *jp, byte *from)
 	for (i=0;i<numplayers;i++)		// it's here already
 		if (!np[i].removed && !memcmp (np[i].addr,from,10) && i != localplayer)
 			return;
-	slot = -1;
-	for (i=0;i<numplayers;i++)
-		if (np[i].removed && np[i].gone)
-		{
-			slot = i;
-			break;
-		}
+	slot = FreeSlot ();
+	if (slot == -1 && BotMakeRoom ())
+		return;						// a bot's going: it'll ask again
 	if (slot == -1)
 	{
 		byte pk[8];
@@ -3606,6 +4280,11 @@ static void NetReceive (void)
 		case pk_ping:
 		case pk_pong:
 			ReceivePing (buf,len,from);
+			continue;
+
+		case pk_bottics:
+			if (deathmatch)
+				ReceiveBotTics (buf,len);
 			continue;
 
 		case pk_tics:
@@ -3874,6 +4553,12 @@ static void NetStartupDM (void)
 	if (dmtimelimit > 999)
 		dmtimelimit = 999;
 	dmfraglimit = ParmInt ("-fraglimit",20);
+	dmbots = ParmInt ("-bots",0);		// (the game's, if we join one)
+	if (dmbots < 0)
+		dmbots = 0;
+	if (dmbots > MAXPLAYERS-2)
+		dmbots = MAXPLAYERS-2;
+	botseed ^= mynonce;
 	if (dmfraglimit < 0)
 		dmfraglimit = 0;
 	if (dmfraglimit > 999)
@@ -3977,6 +4662,8 @@ static void NetStartupDM (void)
 	else if (dmfraglimit)
 		NetSay ("A level is won with %d frags.\n",dmfraglimit);
 	NetSay ("Others can join it any time (wolf3d -deathmatch).\n");
+	if (dmbots)
+		NetSay ("With %d bot%s (they make room for players when it's full).\n",dmbots,dmbots == 1 ? "" : "s");
 	dmalone = true;
 }
 
@@ -4551,7 +5238,7 @@ static int DropArbiter (int p)
 	int i;
 
 	for (i=0;i<numplayers;i++)
-		if (i != p && !np[i].removed && !np[i].gone)
+		if (i != p && !np[i].removed && !np[i].gone && !np[i].bot)
 			return i;
 	return localplayer;
 }
@@ -4569,11 +5256,38 @@ static void WaitForFrame (long f)
 	while (1)
 	{
 		NetReceive ();
+		if (BotFill (maketic-1))		// (we've just become the bots' host)
+			SendTics (pk_tics);
 		for (i=0;i<numplayers;i++)
 			if (!HaveCmd (i,f))
 				break;
 		if (i == numplayers)
 			break;
+
+		if (np[i].bot)
+		{
+			// a bot's controls come from its host: that's who we wait for
+			int h = BotHost (f);
+
+			if (h >= 0 && np[h].gone && TimeCount - start > 70*2)
+			{
+				// ...which has gone without sending them all: the next
+				// one makes them up
+				for (h=0;h<numplayers;h++)
+					if (!np[h].bot && !np[h].removed && !np[h].gone)
+						break;
+				if (h == localplayer)
+				{
+					BotThink (i,f,&np[i].cmds[f & (NETRING-1)]);
+					np[i].cmdframe[f & (NETRING-1)] = f;
+					cmdsender[i][f & (NETRING-1)] = localplayer;
+					SendTics (pk_tics);
+					continue;
+				}
+			}
+			else if (h >= 0)
+				i = h;
+		}
 
 		if (TimeCount - lastsend >= 7)
 		{
@@ -4653,7 +5367,7 @@ static unsigned long ConsistencyHash (void)
 ===================
 */
 
-static void DMJoin (int k, long f)
+static void DMJoin (int k, long f, boolean bot)
 {
 	netplayer_t *p = &np[k];
 	joinrec_t	*rec = &joinrecs[k];
@@ -4668,12 +5382,22 @@ static void DMJoin (int k, long f)
 	NetSetContext (k);
 
 	p->removed = p->dead = p->gone = false;
+	p->bot = bot;
 	p->lastframe = 0x7fffffffl;
 	p->firstcmd = f+1+NETDELAY;
+	slotreserved[k] = -1;
+	botleave[k] = -1;
+	botkick[k] = false;
+	BotReset (k);
 	p->ack = 0;
 	for (i=0;i<NETRING;i++)
 		p->cmdframe[i] = -1;
-	if (rec->frame == f)
+	if (bot)
+	{
+		sprintf (p->name,"%s (bot)",botnames[k]);
+		memset (p->addr,0,sizeof(p->addr));
+	}
+	else if (rec->frame == f)
 	{
 		rec->name[NETNAMELEN] = 0;
 		strcpy (p->name,rec->name);
@@ -4686,7 +5410,7 @@ static void DMJoin (int k, long f)
 	p->respawn = p->pain = p->moving = 0;
 	gotchatid[k] = false;
 
-	if (!deathmatch && rec->frame == f && !strcmp (oldname,p->name))
+	if (!deathmatch && !bot && rec->frame == f && !strcmp (oldname,p->name))
 		;						// co-op, back in the same slot: the score's still there
 	else
 	{
@@ -4828,7 +5552,9 @@ static void RunFrame (long f)
 	{
 		e = GetCmd (i,f)->event;
 		if (e & EV_JOIN)
-			DMJoin (e & (MAXPLAYERS-1),f);
+			DMJoin (e & (MAXPLAYERS-1),f,(e & EV_BOT) != 0);
+		else if ((e & EV_LEAVE) && np[i].bot && !np[i].gone)
+			PlayerLeft (i,f);			// a bot making room
 	}
 
 	if (deathmatch && (dmtimelimit || dmfraglimit))
@@ -5175,6 +5901,11 @@ void NetPlayLoop (void)
 		np[i].firstcmd = 0;
 		if (np[i].removed)
 			np[i].lastframe = -1;
+		slotreserved[i] = -1;
+		botleave[i] = -1;
+		botkick[i] = false;
+		if (np[i].bot)
+			BotReset (i);			// a new map
 	}
 	for (f=0;f<NETRING;f++)
 		hashframes[f] = -1;
@@ -5230,6 +5961,7 @@ void NetPlayLoop (void)
 
 			np[localplayer].cmds[maketic & (NETRING-1)].event = EV_JOIN | pending.slot;
 			pending.frame = maketic;
+			slotreserved[pending.slot] = maketic;
 			memset (r,0,sizeof(*r));
 			r->slot = pending.slot;
 			r->frame = maketic;
@@ -5238,6 +5970,8 @@ void NetPlayLoop (void)
 			lastjoin = *r;
 			havelastjoin = true;
 		}
+		BotManage ();
+		BotFill (maketic);			// the bots' controls for it too, if we're the host
 		maketic++;
 		SendTics (pk_tics);
 
@@ -5284,7 +6018,7 @@ void NetPlayLoop (void)
 	{
 		NetReceive ();
 		for (i=0;i<numplayers;i++)
-			if (i != localplayer && !np[i].gone && np[i].ack < netframe)
+			if (i != localplayer && !np[i].gone && !np[i].bot && np[i].ack < netframe)
 				break;
 		if (i == numplayers)
 			break;
