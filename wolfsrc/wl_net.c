@@ -2412,6 +2412,28 @@ static void SendTics (int type)
 */
 
 static	int		dmbots;				// how many bots (the starter's -bots)
+static	int		dmbotskill = 1;		// how good they are (-botskill 0-3)
+
+// what a bot's like at each -botskill
+typedef struct
+{
+	int		react;				// frames from noticing somebody to shooting
+	int		wobble;				// aim off by up to this (degrees)
+	int		turn;				// degrees a frame at most (keyboard: 3.5, running 7)
+	int		fov;				// notices who's within this of where it looks
+	int		burston,burstoff;	// frames shooting, frames not (0: no let up)
+	int		hunt;				// goes after the nearest one this near unseen (tiles; 99: anywhere)
+	boolean	runroam,runfight;	// runs about, runs in on somebody (else walks)
+} botskill_t;
+
+static	botskill_t botskills[4] =
+{
+	{30,10,4, 50, 6,24, 0,false,false},	// 0 easy: walks, looks ahead, short bursts
+	{20, 6,5, 70,10,16, 8,false,true},		// 1 normal
+	{12, 4,7, 90,18, 8,20,true,true},		// 2 hard
+	{ 6, 2,9,180,99, 0,99,true,true}		// 3 vicious: sees all round, always hunting
+};
+static char *botskillnames[4] = {"easy","normal","hard","vicious"};
 static	byte	cmdsender[MAXPLAYERS][NETRING];	// a bot's controls: who sent them
 static	long	botleave[MAXPLAYERS];		// the frame it leaves after (-1: not)
 static	boolean	botkick[MAXPLAYERS];		// leave at the next frame worked out
@@ -2437,6 +2459,7 @@ typedef struct
 	int		unstickturn;
 	int		wobble,wobbletime;	// aim off by this much, for this long
 	int		usetime;
+	int		burst;				// frames into its burst of fire
 } botbrain_t;
 
 static	botbrain_t brain[MAXPLAYERS];
@@ -2627,7 +2650,8 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 	netplayer_t *p = &np[k];
 	objtype	*ob = p->ob,*t;
 	botbrain_t *b = &brain[k];
-	int		i,best,vis,bestvis,want,diff,tol,react,maxturn,skill,tx,ty,door,angle;
+	int		i,best,vis,bestvis,want,diff,tol,react,maxturn,tx,ty,door,angle;
+	botskill_t *sk;
 	long	d,bestd,dx,dy,dist,g;
 	boolean	go,knife;
 
@@ -2655,9 +2679,9 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 		return;
 	}
 
-	skill = gamestate.difficulty;			// (-skill: how good the bots are)
-	react = 16 - 3*skill;					// frames from seeing to shooting
-	maxturn = 5 + skill*2;					// degrees a frame
+	sk = &botskills[dmbotskill];
+	react = sk->react;
+	maxturn = sk->turn;
 
 	//
 	// the best gun it has
@@ -2680,6 +2704,9 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 		dy = labs (np[i].ob->y - ob->y);
 		d = dx > dy ? dx : dy;
 		vis = BotSight (ob,np[i].ob);
+		if (vis && !(i == b->target && b->seen) && d >= 2*TILEGLOBAL && !p->pain
+		&& abs (AngleDiff (NetAngle (np[i].ob->x - ob->x,ob->y - np[i].ob->y),angle)) > sk->fov)
+			vis = 0;						// not looking that way
 		if (i == b->target && vis)
 			d -= 0x20000;					// (rather the one it's on)
 		if ((vis && !bestvis) || (vis == bestvis && d < bestd))
@@ -2689,18 +2716,20 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 			bestvis = vis;
 		}
 	}
+	if (best >= 0 && !bestvis && bestd > (long)sk->hunt*TILEGLOBAL)
+		best = -1;							// not one it knows of: wander
 	if (best != b->target)
 		b->seen = 0;
 	b->target = best;
 	if (bestvis)
 		b->seen++;
 	else
-		b->seen = 0;
+		b->seen = b->burst = 0;
 
 	if (--b->wobbletime <= 0)
 	{
 		b->wobbletime = 12 + (BotRand () & 15);
-		i = 4 - skill;
+		i = sk->wobble;
 		b->wobble = (int)(BotRand () % (2*i+1)) - i;
 	}
 
@@ -2738,10 +2767,16 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 
 		tol = 3 + (int)((16l*0x10000)/(dist+0x20000));
 		if (b->seen >= react && abs (diff) <= tol && (!knife || dist < 0x18000))
-			cmd->buttons |= 1<<bt_attack;
+		{
+			// in bursts, with a breather between
+			if (!sk->burstoff || b->burst < sk->burston)
+				cmd->buttons |= 1<<bt_attack;
+			if (++b->burst >= sk->burston+sk->burstoff)
+				b->burst = 0;
+		}
 
 		if (knife || dist > 5*TILEGLOBAL)
-			cmd->y = -140;					// in on it
+			cmd->y = sk->runfight ? -140 : -70;	// in on it
 		else if (dist < 2*TILEGLOBAL)
 			cmd->y = 40;					// not too close
 		b->wayx = -1;
@@ -2798,7 +2833,7 @@ static void BotThink (int k, long f, netcmd_t *cmd)
 			BotTurn (cmd,diff,maxturn);
 			if (abs (diff) < 50)
 			{
-				cmd->y = abs (diff) < 20 ? -140 : -60;
+				cmd->y = abs (diff) >= 20 ? -60 : (best >= 0 ? sk->runfight : sk->runroam) ? -140 : -70;
 				go = true;
 			}
 
@@ -3912,6 +3947,7 @@ static long WriteGame (byte *buf, int slot)
 	SnapPutLong (dmfraglimit);
 	SnapPutLong (dmendframe);
 	SnapPutLong (dmbots);
+	SnapPutLong (dmbotskill);
 
 	return sp - buf;
 }
@@ -4044,6 +4080,9 @@ static boolean ReadGame (byte *buf, long len)
 	dmfraglimit = SnapGetLong ();
 	dmendframe = SnapGetLong ();
 	dmbots = SnapGetLong ();
+	dmbotskill = SnapGetLong ();
+	if (dmbotskill < 0 || dmbotskill > 3)
+		dmbotskill = 1;
 	dmtimeup = dmendframe >= 0;
 
 	localplayer = slot;
@@ -4558,6 +4597,11 @@ static void NetStartupDM (void)
 		dmbots = 0;
 	if (dmbots > MAXPLAYERS-2)
 		dmbots = MAXPLAYERS-2;
+	dmbotskill = ParmInt ("-botskill",1);
+	if (dmbotskill < 0)
+		dmbotskill = 0;
+	if (dmbotskill > 3)
+		dmbotskill = 3;
 	botseed ^= mynonce;
 	if (dmfraglimit < 0)
 		dmfraglimit = 0;
@@ -4663,7 +4707,8 @@ static void NetStartupDM (void)
 		NetSay ("A level is won with %d frags.\n",dmfraglimit);
 	NetSay ("Others can join it any time (wolf3d -deathmatch).\n");
 	if (dmbots)
-		NetSay ("With %d bot%s (they make room for players when it's full).\n",dmbots,dmbots == 1 ? "" : "s");
+		NetSay ("With %d %s bot%s (they make room for players when it's full).\n",dmbots,
+			botskillnames[dmbotskill],dmbots == 1 ? "" : "s");
 	dmalone = true;
 }
 

@@ -355,6 +355,8 @@ static const char *fragnames[NUMFRAGS] =
 static const int fragcounts[NUMFRAGS] = {0,5,10,15,20,25,30,50,100};
 static int		net_fraglimit = 20;
 static int		net_bots;						// deathmatch: -bots N
+static int		net_botskill = 1;				// -botskill 0-3
+static const char *botskillnames[] = {"Easy","Normal","Hard","Vicious"};
 static int		net_frags = 4;					// fragnames[]: 20
 
 static void LoadNet (void)
@@ -388,6 +390,8 @@ static void LoadNet (void)
 		net_fraglimit = 20;
 	if (fscanf (f," bots=%d",&net_bots) != 1 || net_bots < 0 || net_bots > 14)
 		net_bots = 0;
+	if (fscanf (f," botskill=%d",&net_botskill) != 1 || net_botskill < 0 || net_botskill > 3)
+		net_botskill = 1;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -419,6 +423,7 @@ static void SaveNet (void)
 		fprintf (f,"timelimit=%d\n",net_timelimit);
 		fprintf (f,"fraglimit=%d\n",net_fraglimit);
 		fprintf (f,"bots=%d\n",net_bots);
+		fprintf (f,"botskill=%d\n",net_botskill);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -1380,7 +1385,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4];
 	const char *args[32];
 	int		n,act;
 	field_t	f[] =
@@ -1396,6 +1401,7 @@ static void NetworkScreen (int standalone)
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
 		{F_NUMBER,"Bots (deathmatch)",0,0,14,0,0,&net_bots},
+		{F_CHOICE,"Bot skill",0,0,3,botskillnames,0,&net_botskill},
 #ifdef __linux__
 		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
@@ -1410,9 +1416,9 @@ static void NetworkScreen (int standalone)
 	for (;;)
 	{
 #ifdef __linux__
-		act = Form ("Network game",f,15,&cursor,
+		act = Form ("Network game",f,16,&cursor,
 #else
-		act = Form ("Network game (IPX)",f,13,&cursor,
+		act = Form ("Network game (IPX)",f,14,&cursor,
 #endif
 			"Co-op: player 1's settings count. Deathmatch: the game's.");
 		if (act == -1)
@@ -1441,7 +1447,9 @@ static void NetworkScreen (int standalone)
 			if (net_bots)
 			{
 				sprintf (bt,"%d",net_bots);
+				sprintf (bs,"%d",net_botskill);
 				args[n++] = "-bots"; args[n++] = bt;
+				args[n++] = "-botskill"; args[n++] = bs;
 			}
 		}
 		else
