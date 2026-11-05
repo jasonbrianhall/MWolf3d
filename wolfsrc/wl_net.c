@@ -2282,7 +2282,7 @@ typedef struct
 
 static	long	pingms[MAXPLAYERS];		// the last round trip, in ms
 static	boolean	haveping[MAXPLAYERS];
-static	boolean	showpings;			// the list in the corner (P; -noping: off)
+static	boolean	showpings;			// the list in the corner (off: P or -ping shows it; Tab's scores have them anyway)
 
 static	droppacket_t dropped;
 static	int		dropannounce;			// frames to keep telling them
@@ -4766,7 +4766,7 @@ static void NetOptions (void)
 	SD_PlayHook = NetPlaySound;
 	if (Parm ("-netlog"))
 		netlog = fopen ("NETLOG.TXT","w");
-	showpings = !Parm ("-noping");		// (P switches it in the game)
+	showpings = Parm ("-ping");			// (P switches it in the game)
 	NoWait = true;
 	LoadMacros ();
 }
