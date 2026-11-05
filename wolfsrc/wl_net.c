@@ -650,6 +650,16 @@ void NetKillPlayer (objtype *attacker)
 	if (netcontext == localplayer)
 		SD_PlaySound (PLAYERDEATHSND);
 
+	//
+	// deathmatch: whoever dies with ammo (bots too) drops a magazine where
+	// they fell; it doesn't come back once it's picked up (DMItemsStart
+	// only marks the map's own items to return). Every machine runs this
+	// in the same frame, so it's placed the same everywhere.
+	//
+	if (deathmatch && gamestate.ammo > 0)
+		PlaceItemType (gamestate.ammo >= 8 ? bo_clip : bo_clip2,
+			player->tilex,player->tiley);
+
 	k = PlayerNum (attacker);
 	if (!deathmatch)
 	{
@@ -2551,14 +2561,32 @@ static int BotWantItem (int k)
 
 //
 // BotHost: whose machine works the bots' controls for frame f out: the
-// lowest numbered player (not a bot) in the game at f
+// lowest numbered player (not a bot) in the game at f. A newcomer counts
+// only from its own first controls (firstcmd) on: the frames before that
+// were worked out (and sent) by the host before it, and the newcomer has
+// to get them from there, not make up its own (that was a desync when
+// somebody joined into a slot below the host's, e.g. after player 1 left)
 //
 static int BotHost (long f)
 {
 	int i;
 
 	for (i=0;i<numplayers;i++)
-		if (!np[i].bot && !np[i].removed && !(np[i].gone && f > np[i].lastframe))
+		if (!np[i].bot && !np[i].removed && f >= np[i].firstcmd
+		&& !(np[i].gone && f > np[i].lastframe))
+			return i;
+	return -1;
+}
+
+// NextBotHost: who takes the bots over when the host went early (before
+// sending all it had to): the lowest numbered player still here, in the
+// game by frame f
+static int NextBotHost (long f)
+{
+	int i;
+
+	for (i=0;i<numplayers;i++)
+		if (!np[i].bot && !np[i].removed && !np[i].gone && f >= np[i].firstcmd)
 			return i;
 	return -1;
 }
@@ -3006,6 +3034,29 @@ static int BotFill (long last)
 	return n;
 }
 
+// bot k's controls for frame f: we have them, and worked them out
+static boolean OwnBotCmd (int k, long f)
+{
+	int r = f & (NETRING-1);
+
+	return f >= np[k].firstcmd && np[k].cmdframe[r] == f && cmdsender[k][r] == localplayer;
+}
+
+static void SendBotPacket (botpacket_t *pk, byte **d)
+{
+	int i,len;
+
+	if (pk->nbots)
+	{
+		len = *d - (byte *)pk;
+		for (i=0;i<numplayers;i++)
+			if (i != localplayer && !np[i].gone && !np[i].bot)
+				IPXSend (i,np[i].addr,pk,len);
+	}
+	pk->nbots = 0;
+	*d = pk->data;
+}
+
 //
 // SendBotTics: the controls of the bots we're the host for, to the others
 // (with SendTics)
@@ -3013,20 +3064,23 @@ static int BotFill (long last)
 static void SendBotTics (void)
 {
 	botpacket_t pk;
-	int		k,i,len,n,skip;
-	long	f,first,start = 0;
+	int		k,n,skip;
+	long	f,first,start,end;
 	byte	*d;
 
 	if (!deathmatch)
 		return;
-	for (i=0;i<numplayers;i++)			// (the next host, when the last went early)
-		if (!np[i].bot && !np[i].removed && !np[i].gone)
-			break;
-	if (BotHost (maketic-1) != localplayer && i != localplayer)
-		return;
 	first = maketic - BOTBACKUP;
 	if (first < NETDELAY)
 		first = NETDELAY;
+	// the host for any of these frames (a newcomer below us takes over
+	// only from its first controls: till then, the ones before are still
+	// ours to send), or the next host when the last went early
+	for (f=first;f<maketic;f++)
+		if (BotHost (f) == localplayer)
+			break;
+	if (f == maketic && NextBotHost (maketic-1) != localplayer)
+		return;
 
 	memset (&pk,0,sizeof(pk));
 	pk.magic[0] = 'W'; pk.magic[1] = '3';
@@ -3036,54 +3090,41 @@ static void SendBotTics (void)
 	pk.first = first;
 	d = pk.data;
 
-	for (k=0;k<=numplayers;k++)
+	// every run of each bot's controls we worked out ourselves in the
+	// window (not just the run up to maketic: when a newcomer below us has
+	// taken over, the later frames are its, and the earlier ones still go
+	// out from here; never somebody else's, which may since be void)
+	for (k=0;k<numplayers;k++)
 	{
-		if (k < numplayers)
+		if (!np[k].bot || np[k].removed)
+			continue;
+		for (start=first;start<maketic;start=end)
 		{
-			if (!np[k].bot || np[k].removed)
-				continue;
-			// the run of its controls up to the last one we have
-			start = maketic;
-			for (f=maketic-1;f>=first && f>=np[k].firstcmd;f--)
+			if (!OwnBotCmd (k,start))
 			{
-				if (np[k].cmdframe[f & (NETRING-1)] != f)
+				end = start+1;
+				continue;
+			}
+			for (end=start;end<maketic;end++)
+				if (!OwnBotCmd (k,end))
 					break;
-				start = f;
-			}
-			n = maketic-start;
-			if (!n)
-				continue;
-		}
-		else
-			n = 0;
+			n = end-start;
 
-		// full (or the end): out it goes
-		if (k == numplayers || d+3+n*sizeof(netcmd_t) > pk.data+sizeof(pk.data))
-		{
-			if (pk.nbots)
+			if (d+3+n*sizeof(netcmd_t) > pk.data+sizeof(pk.data))
+				SendBotPacket (&pk,&d);			// full: out it goes
+			skip = start-first;
+			*d++ = k;
+			*d++ = skip;
+			*d++ = n;
+			for (f=start;f<end;f++)
 			{
-				len = d - (byte *)&pk;
-				for (i=0;i<numplayers;i++)
-					if (i != localplayer && !np[i].gone && !np[i].bot)
-						IPXSend (i,np[i].addr,&pk,len);
+				memcpy (d,&np[k].cmds[f & (NETRING-1)],sizeof(netcmd_t));
+				d += sizeof(netcmd_t);
 			}
-			pk.nbots = 0;
-			d = pk.data;
-			if (k == numplayers)
-				break;
+			pk.nbots++;
 		}
-
-		skip = start-first;
-		*d++ = k;
-		*d++ = skip;
-		*d++ = n;
-		for (f=start;f<maketic;f++)
-		{
-			memcpy (d,&np[k].cmds[f & (NETRING-1)],sizeof(netcmd_t));
-			d += sizeof(netcmd_t);
-		}
-		pk.nbots++;
 	}
+	SendBotPacket (&pk,&d);
 }
 
 static void ReceiveBotTics (byte *buf, int len)
@@ -5438,10 +5479,7 @@ static void WaitForFrame (long f)
 			{
 				// ...which has gone without sending them all: the next
 				// one makes them up
-				for (h=0;h<numplayers;h++)
-					if (!np[h].bot && !np[h].removed && !np[h].gone)
-						break;
-				if (h == localplayer)
+				if (NextBotHost (f) == localplayer)
 				{
 					BotThink (i,f,&np[i].cmds[f & (NETRING-1)]);
 					np[i].cmdframe[f & (NETRING-1)] = f;

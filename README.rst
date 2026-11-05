@@ -83,7 +83,8 @@ game, ``-join`` waits for one instead of starting it. There are no
 enemies, no treasure, keys or extra lives on the map; everybody starts
 (and comes back) with every weapon, both keys and 50 rounds, somewhere
 at random, and the ammo, food and first aid kits that are picked up come
-back after 30 seconds. The exit is shut. With ``-monsters`` (Enemies in IPXSETUP) the map's
+back after 30 seconds. Anybody (bots too) who dies with ammo drops a
+magazine where they fell; that one doesn't come back. The exit is shut. With ``-monsters`` (Enemies in IPXSETUP) the map's
 guards, dogs and bosses stay in, and one that's killed comes back where
 it started 1 to 2 minutes later, with the respawn (teleport) sound; being killed by one costs no frag.
 The game's starter decides. A level ends when somebody gets 20 frags
