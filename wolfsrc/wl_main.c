@@ -240,7 +240,7 @@ static void ShowHelp (void)
 "  -tcp HOST[:PORT]         over TCP instead, through a -tcpserver (for the\n"
 "                           internet, when UDP doesn't get through)\n"
 "  -tcpserver [PORT]        be that server, on TCP port 27135 or PORT\n"
-"  -noping                  don't show the ping times (P in the game switches them)\n"
+"  -ping                    show the ping times in the corner (P in the game switches them)\n"
 "  -netlog                  write NETLOG.TXT\n",
 		_argv[0]);
 #else

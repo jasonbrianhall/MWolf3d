@@ -242,8 +242,8 @@ packet holds up the ones after it, so UDP plays better where it works.
 TCP is Linux only (the DOS game has IPX).
 
 The others' ping times (there and back, in milliseconds: green, yellow
-over 120, red over 250) are in the top right corner; P hides them (or
-``-noping``), and the scores (Tab) show them too.
+over 120, red over 250) are on the scores (Tab); P (or ``-ping``) also
+keeps them in the top right corner.
 
 Playing with DOS players: the DOS game in DOSBox talks IPX through
 DOSBox's IPXNET (IPX packets in UDP, through a server everyone connects
