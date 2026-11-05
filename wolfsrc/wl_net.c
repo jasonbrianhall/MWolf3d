@@ -73,6 +73,8 @@ void	US_SetRndIndex (int index);
 
 #define NETTICS		2			// tics per game frame (35 frames a second)
 #define NETDELAY	2			// frames between sampling and using controls
+#define DROPSECONDS	8			// a player gone quiet this long is dropped
+								// (co-op too: then the slot's free to come back to)
 #define NETBACKUP	8			// frames of controls in every packet
 #define NETRING		64			// must be a power of two, > 2*NETBACKUP
 #define RESPAWNTICS	(70*3)
@@ -2146,7 +2148,7 @@ static char *AddrStr (byte *a)
 */
 
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop,
-	pk_ping,pk_pong,pk_bottics,pk_botneed};
+	pk_ping,pk_pong,pk_bottics,pk_need};
 
 #define NETVERSION	9
 
@@ -2198,15 +2200,15 @@ typedef struct
 	byte	data[PKTMAX-12];
 } __attribute__((packed)) botpacket_t;
 
-// the bots' host went without our having a bot's controls for a frame:
-// whoever has them, send them (see BotNeed)
+// we've been waiting a while for a player's (or a bot's) controls for a
+// frame: whoever has them, send them (see SendNeed)
 typedef struct
 {
 	byte	magic[2];
 	byte	type,player;		// player: who's asking
-	byte	seq,bot,pad[2];
+	byte	seq,who,commit,pad;	// who: whose controls; commit: see SendNeed
 	long	frame;
-} __attribute__((packed)) botneedpacket_t;
+} __attribute__((packed)) needpacket_t;
 
 // deathmatch: is there a game? (any player answers, with the arbiter)
 typedef struct
@@ -2378,6 +2380,7 @@ static int Arbiter (void)
 }
 
 static	void	SendBotTics (void);
+static	boolean	HaveCmd (int p, long f);
 
 static void SendTics (int type)
 {
@@ -2475,8 +2478,9 @@ static	byte	cmdsender[MAXPLAYERS][NETRING];	// a bot's controls: who sent them
 static	long	botleave[MAXPLAYERS];		// the frame it leaves after (-1: not)
 static	boolean	botkick[MAXPLAYERS];		// leave at the next frame worked out
 static	long	slotreserved[MAXPLAYERS];	// a join event's frame, till it's run
-static	long	needfrom[MAXPLAYERS][MAXPLAYERS];	// [bot][player]: the frame it says it hasn't the bot's controls for
+static	long	needfrom[MAXPLAYERS][MAXPLAYERS];	// [who][player]: the frame it says (for good) it hasn't who's controls for
 static	long	myneed[MAXPLAYERS];			// the frame we've said that for (-1: none)
+static	long	heard[MAXPLAYERS];			// TimeCount we last heard from each
 
 static char *botnames[MAXPLAYERS] =
 {
@@ -2511,7 +2515,7 @@ static int BotRand (void)		// 0-255: the brain's own, not the game's
 	return (botseed >> 16) & 255;
 }
 
-static void BotNeedReset (int k)
+static void NeedReset (int k)
 {
 	int i;
 
@@ -2634,7 +2638,7 @@ static void BotsLeftBy (int p, long lastframe)
 	if (np[p].bot)
 		return;
 	for (b=0;b<numplayers;b++)
-		if (b != p)
+		if (b != p && np[b].bot)		// (a player's cmdsender is never set: 0)
 			for (r=0;r<NETRING;r++)
 				if (cmdsender[b][r] == p && np[b].cmdframe[r] > lastframe)
 					np[b].cmdframe[r] = -1;
@@ -3158,6 +3162,7 @@ static void ReceiveBotTics (byte *buf, int len)
 	if (len < 12 || pk->host >= numplayers || pk->host == localplayer || np[pk->host].bot)
 		return;
 	h = pk->host;
+	heard[h] = TimeCount;
 	if (pk->seq != levelseq)
 	{
 		if (pk->seq == oldseq)
@@ -3180,8 +3185,9 @@ static void ReceiveBotTics (byte *buf, int len)
 				continue;				// had it (the first word counts)
 			if (np[h].gone && f > np[h].lastframe)
 				continue;				// not its to say any more
-			if (np[h].gone && myneed[k] == f)
-				continue;				// we said we hadn't them: too late now
+			if (np[k].bot && myneed[k] == f && h == BotHost (f))
+				continue;				// we said for good we hadn't them: too late now
+										// (from the host that went, or went quiet)
 			memcpy (&np[k].cmds[r],d,sizeof(netcmd_t));
 			np[k].cmdframe[r] = f;
 			cmdsender[k][r] = h;
@@ -3190,16 +3196,24 @@ static void ReceiveBotTics (byte *buf, int len)
 }
 
 /*
- When the bots' host goes (Esc, or dropped) it may have sent a bot's
- controls for its last frames to some of us and not to others. Making
- them up again then would have two versions of the same frame about, and
- the machines that had the one would run a different game from those
- that got the other. So whoever's stuck without them asks everyone
- (pk_botneed, from WaitForFrame); anybody who has them sends them back;
- and only once every player still here has said they haven't them (none
- can have run that frame, then) does the next host make them up. Having
- said so, a machine won't take the old host's for that frame any more,
- should they turn up late.
+ MISSING CONTROLS
+
+ Somebody's controls for a frame may reach some machines and not others:
+ a bots' host that leaves (Esc, or dropped) may have sent a bot's for its
+ last frames to some of us only, and a player whose machine dies may have
+ got its last packet through to some of us only. Deciding then without
+ them (the next bots' host making a bot's up, the arbiter dropping the
+ player before that frame) would split the game: the machines that had
+ them would have run that frame with them.
+
+ So whoever's stuck waiting asks everyone (pk_need); anybody who has the
+ controls sends them back (and the one stuck goes on). After long enough
+ (a bot's host gone: 2 seconds; a player: the drop time) it asks "for
+ good" (commit): from then on it won't take those controls from the one
+ that went quiet (or the bots' host that went) should they turn up late,
+ only from somebody else who had them. Only when every player still here
+ has asked for good (so none has them, and none can have run that frame)
+ does the next bots' host make a bot's up, or the arbiter drop the player.
 */
 
 // a player still in the game runs frame f (a newcomer, from the frame
@@ -3211,40 +3225,59 @@ static boolean RunsFrame (int j, long f)
 	return !np[j].bot && !np[j].removed && !np[j].gone && np[j].firstcmd <= f+NETDELAY;
 }
 
-static void SendBotNeed (int k, long f)
+static void SendNeed (int k, long f, boolean commit)
 {
-	botneedpacket_t pk;
+	needpacket_t pk;
 	int i;
 
-	myneed[k] = f;
+	if (commit)
+		myneed[k] = f;
 	memset (&pk,0,sizeof(pk));
 	pk.magic[0] = 'W'; pk.magic[1] = '3';
-	pk.type = pk_botneed;
+	pk.type = pk_need;
 	pk.player = localplayer;
 	pk.seq = levelseq;
-	pk.bot = k;
+	pk.who = k;
+	pk.commit = commit;
 	pk.frame = f;
 	for (i=0;i<numplayers;i++)
-		if (i != localplayer && !np[i].gone && !np[i].bot && !np[i].removed)
+		if (i != localplayer && i != k && !np[i].gone && !np[i].bot && !np[i].removed)
 			IPXSend (i,np[i].addr,&pk,sizeof(pk));
 }
 
-static void ReceiveBotNeed (byte *buf, int len)
+static void ReceiveNeed (byte *buf, int len)
 {
-	botneedpacket_t *pk = (botneedpacket_t *)buf;
+	needpacket_t *pk = (needpacket_t *)buf;
 	botpacket_t	rp;
 	int		p,k,r;
 
 	if (len < sizeof(*pk) || pk->seq != levelseq)
 		return;
 	p = pk->player;
-	k = pk->bot;
+	k = pk->who;
 	if (p >= numplayers || p == localplayer || np[p].bot || np[p].gone
-	|| k >= numplayers || !np[k].bot)
+	|| k >= numplayers || k == p || np[k].removed)
 		return;
-	needfrom[k][p] = pk->frame;
+	heard[p] = TimeCount;
+	if (pk->commit)
+		needfrom[k][p] = pk->frame;
 
-	// we have them: back they go, to the one asking
+	// it's gone (or was dropped) before that: say so again (it missed it)
+	if (np[k].gone && pk->frame > np[k].lastframe)
+	{
+		droppacket_t dp;
+
+		memset (&dp,0,sizeof(dp));
+		dp.magic[0] = 'W'; dp.magic[1] = '3';
+		dp.type = pk_drop;
+		dp.slot = k;
+		dp.lastframe = np[k].lastframe;
+		IPXSend (p,np[p].addr,&dp,sizeof(dp));
+		return;
+	}
+
+	// we have them: back they go, to the one asking (in a bot packet,
+	// which takes anybody's controls)
 	r = pk->frame & (NETRING-1);
 	if (pk->frame < np[k].firstcmd || np[k].cmdframe[r] != pk->frame)
 		return;
@@ -3262,13 +3295,17 @@ static void ReceiveBotNeed (byte *buf, int len)
 	IPXSend (p,np[p].addr,&rp,12+3+sizeof(netcmd_t));
 }
 
-// everybody else still here has said they haven't bot k's controls for f
-static boolean NobodyHasBotCmd (int k, long f)
+// everybody else still here (and not gone quiet itself) has said for good
+// that they haven't k's controls for f
+static boolean NobodyHasCmd (int k, long f)
 {
 	int j;
 
+	if (myneed[k] != f)
+		return false;
 	for (j=0;j<numplayers;j++)
-		if (j != localplayer && RunsFrame (j,f) && needfrom[k][j] != f)
+		if (j != localplayer && j != k && RunsFrame (j,f)
+		&& TimeCount - heard[j] < 70*DROPSECONDS && needfrom[k][j] != f)
 			return false;
 	return true;
 }
@@ -4574,14 +4611,12 @@ static void NetReceive (void)
 			ReceivePing (buf,len,from);
 			continue;
 
-		case pk_bottics:
-			if (deathmatch)
-				ReceiveBotTics (buf,len);
+		case pk_bottics:				// (co-op too: what SendNeed gets back)
+			ReceiveBotTics (buf,len);
 			continue;
 
-		case pk_botneed:
-			if (deathmatch)
-				ReceiveBotNeed (buf,len);
+		case pk_need:
+			ReceiveNeed (buf,len);
 			continue;
 
 		case pk_tics:
@@ -4596,6 +4631,7 @@ static void NetReceive (void)
 		|| pk->player == localplayer || pk->count > NETBACKUP)
 			continue;
 		p = &np[pk->player];
+		heard[pk->player] = TimeCount;
 
 		if (pk->seq != levelseq)
 		{
@@ -4615,6 +4651,8 @@ static void NetReceive (void)
 		for (i=0;i<pk->count;i++)
 		{
 			f = pk->first+i;
+			if (f == myneed[pk->player] && !HaveCmd (pk->player,f))
+				continue;			// we said for good we hadn't it: too late
 			p->cmdframe[f & (NETRING-1)] = f;
 			p->cmds[f & (NETRING-1)] = pk->cmds[i];
 		}
@@ -5549,7 +5587,6 @@ static void ShowMessage (char *str)
 // DropArbiter: who decides to go on without player p: the lowest numbered
 // player still in the game, not counting p
 //
-#define DROPSECONDS	8			// (co-op too: then the slot's free to come back to)
 
 static int DropArbiter (int p)
 {
@@ -5563,8 +5600,8 @@ static int DropArbiter (int p)
 
 static void WaitForFrame (long f)
 {
-	long	start,lastsend,lastneed = -100;
-	int		i,k;
+	long	start,lastsend,lastneed = -100,droptime;
+	int		i,k,h,w;
 	boolean	shown;
 	char	str[80];
 
@@ -5581,26 +5618,43 @@ static void WaitForFrame (long f)
 				break;
 		if (i == numplayers)
 			break;
+		w = i;			// whose controls are missing (i: whom we wait for)
+
+		//
+		// waiting a while: ask round for what's missing (see SendNeed):
+		// a bot's whose host has gone, for good after 2 seconds; a
+		// player's, for good after the drop time
+		//
+		droptime = 70*(f < FRAMESASEC ? 3*DROPSECONDS : DROPSECONDS);
+		if (TimeCount - start > 70*2 && TimeCount - lastneed >= 7)
+		{
+			for (k=0;k<numplayers;k++)
+			{
+				if (HaveCmd (k,f) || np[k].removed)
+					continue;
+				if (np[k].bot)
+				{
+					// (its host gone, or gone quiet)
+					h = BotHost (f);
+					if (h >= 0 && h != localplayer)
+						SendNeed (k,f,np[h].gone || TimeCount - start > droptime);
+				}
+				else if (k != localplayer)
+					SendNeed (k,f,TimeCount - start > droptime);
+			}
+			lastneed = TimeCount;
+		}
 
 		if (np[i].bot)
 		{
 			// a bot's controls come from its host: that's who we wait for
-			int h = BotHost (f);
+			h = BotHost (f);
 
-			if (h >= 0 && np[h].gone && TimeCount - start > 70*2)
+			if (h >= 0 && np[h].gone)
 			{
-				// ...which has gone without sending them all: ask round
-				// for them (BotNeed), and if nobody has them, the next
-				// host makes them up
-				if (TimeCount - lastneed >= 7)
-				{
-					for (k=0;k<numplayers;k++)
-						if (np[k].bot && !HaveCmd (k,f))
-							SendBotNeed (k,f);
-					lastneed = TimeCount;
-				}
-				if (NextBotHost (f) == localplayer && myneed[i] == f
-				&& NobodyHasBotCmd (i,f))
+				// ...which has gone without sending them all: if nobody
+				// has them, the next host makes them up
+				if (NextBotHost (f) == localplayer && NobodyHasCmd (i,f))
 				{
 					BotThink (i,f,&np[i].cmds[f & (NETRING-1)]);
 					np[i].cmdframe[f & (NETRING-1)] = f;
@@ -5626,10 +5680,12 @@ static void WaitForFrame (long f)
 		}
 		if (shown && Keyboard[sc_Escape])
 			Quit (NULL);				// NetShutdown tells them
-		if (TimeCount - start > 70*(f < FRAMESASEC ? 3*DROPSECONDS : DROPSECONDS)
-		&& DropArbiter (i) == localplayer)
+		if (TimeCount - start > droptime && !np[i].bot && !np[i].gone
+		&& DropArbiter (i) == localplayer && NobodyHasCmd (w,f))
 		{
-			// it's gone quiet: play on without it
+			// it's gone quiet, and nobody still here has its controls (or
+			// the bot's it works out) for this frame, so nobody can have
+			// run it: play on without it
 			memset (&dropped,0,sizeof(dropped));
 			dropped.magic[0] = 'W'; dropped.magic[1] = '3';
 			dropped.type = pk_drop;
@@ -5713,7 +5769,7 @@ static void DMJoin (int k, long f, boolean bot)
 	botleave[k] = -1;
 	botkick[k] = false;
 	BotReset (k);
-	BotNeedReset (k);
+	NeedReset (k);
 	for (i=0;i<MAXPLAYERS;i++)
 		needfrom[i][k] = -1;		// (what the last one in this slot asked)
 	p->ack = 0;
@@ -6233,7 +6289,8 @@ void NetPlayLoop (void)
 		botkick[i] = false;
 		if (np[i].bot)
 			BotReset (i);			// a new map
-		BotNeedReset (i);			// (frame numbers start again)
+		NeedReset (i);				// (frame numbers start again)
+		heard[i] = 0;
 	}
 	for (f=0;f<NETRING;f++)
 		hashframes[f] = -1;
