@@ -46,6 +46,7 @@ boolean	deathmatch;				// -deathmatch
 boolean	dmmonsters;				// -monsters: the map's enemies are there too
 int		dmtimelimit = 30;		// -timelimit: minutes on a level (0: no limit)
 int		dmfraglimit = 20;		// -fraglimit: frags that win a level (0: no limit)
+int		dmitemsecs = 30;		// -itemrespawn: seconds till a picked up item is back (0: never)
 int		numplayers = 1;
 int		localplayer;
 int		netcontext;
@@ -98,7 +99,6 @@ typedef struct
 #define EV_LEAVE	0x20		// in a bot's own controls: it goes, after this frame
 
 #define DMAMMO		50			// ammo after a deathmatch (re)spawn
-#define DMITEMTICS	(70*30)		// a picked up item comes back after this
 #define DMQUICKTICS	70			// dead this long: fire or use comes back
 #define FRAMESASEC	(70/NETTICS)
 #define DMENDFRAMES	(FRAMESASEC*6)	// time's up: the scores, then the next level
@@ -1286,7 +1286,10 @@ static void NetPickups (objtype *ob)
 		oldkeys = gamestate.keys;
 		GetBonus (statptr);
 		if (deathmatch && statptr->shapenum == -1 && dmorig[statptr-statobjlist] != -1)
-			dmrespawn[statptr-statobjlist] = DMITEMTICS;	// (not what guards drop)
+		{
+			if (dmitemsecs)				// (0: never back)
+				dmrespawn[statptr-statobjlist] = dmitemsecs*70;	// (not what guards drop)
+		}
 		else if (!deathmatch && hello_food && statptr->shapenum == -1 && dmorig[statptr-statobjlist] != -1
 		&& (statptr->itemnumber == bo_food || statptr->itemnumber == bo_alpo
 		|| statptr->itemnumber == bo_firstaid))
@@ -4234,6 +4237,7 @@ static long WriteGame (byte *buf, int slot)
 		PutPlayer (&np[i]);
 	SnapPutLong (dmtimelimit);
 	SnapPutLong (dmfraglimit);
+	SnapPutLong (dmitemsecs);
 	SnapPutLong (dmendframe);
 	SnapPutLong (dmbots);
 	SnapPutLong (dmbotskill);
@@ -4367,6 +4371,7 @@ static boolean ReadGame (byte *buf, long len)
 	}
 	dmtimelimit = SnapGetLong ();
 	dmfraglimit = SnapGetLong ();
+	dmitemsecs = SnapGetLong ();
 	dmendframe = SnapGetLong ();
 	dmbots = SnapGetLong ();
 	dmbotskill = SnapGetLong ();
@@ -4463,7 +4468,7 @@ static void ReplyInfo (byte *from, unsigned long nonce)
 	pk.nonce = nonce;
 	pk.monsters = dmmonsters;
 	pk.friendlyfire = hello_ff;
-	pk.food = hello_food;
+	pk.food = deathmatch ? dmitemsecs : hello_food;	// (deathmatch: -itemrespawn)
 	pk.timelimit = dmtimelimit;
 	pk.fraglimit = dmfraglimit;
 	pk.build = BuildId ();
@@ -4895,6 +4900,13 @@ static void NetStartupDM (void)
 	if (dmtimelimit > 999)
 		dmtimelimit = 999;
 	dmfraglimit = ParmInt ("-fraglimit",20);
+	for (i=1;i<_argc;i++)				// (the game's, if we join one)
+		if (!stricmp (_argv[i],"-itemrespawn"))
+			dmitemsecs = i+1 < _argc && isdigit (_argv[i+1][0]) ? atoi (_argv[i+1]) : 30;
+	if (dmitemsecs < 0)
+		dmitemsecs = 0;
+	if (dmitemsecs > 300)
+		dmitemsecs = 300;				// (tics in an int, on DOS)
 	dmbots = ParmInt ("-bots",0);		// (the game's, if we join one)
 	if (dmbots < 0)
 		dmbots = 0;
@@ -4961,6 +4973,7 @@ static void NetStartupDM (void)
 				dmmonsters = ip->monsters;
 				dmtimelimit = ip->timelimit;
 				dmfraglimit = ip->fraglimit;
+				dmitemsecs = ip->food;
 				for (i=0;i<10 && !ip->arbiter[i];i++)
 					;
 				memcpy (arbaddr,i == 10 ? from : ip->arbiter,10);
@@ -5008,6 +5021,10 @@ static void NetStartupDM (void)
 		NetSay ("The next level comes every %d minutes.\n",dmtimelimit);
 	else if (dmfraglimit)
 		NetSay ("A level is won with %d frags.\n",dmfraglimit);
+	if (dmitemsecs)
+		NetSay ("Ammo, food and first aid come back %d seconds after they're picked up.\n",dmitemsecs);
+	else
+		NetSay ("Ammo, food and first aid don't come back once they're picked up.\n");
 	NetSay ("Others can join it any time (wolf3d -deathmatch).\n");
 	if (dmbots)
 		NetSay ("With %d %s bot%s (they make room for players when it's full).\n",dmbots,

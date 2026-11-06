@@ -356,10 +356,8 @@ static const int fragcounts[NUMFRAGS] = {0,5,10,15,20,25,30,50,100};
 static int		net_fraglimit = 20;
 static int		net_bots;						// deathmatch: -bots N
 static int		net_botskill = 1;				// -botskill 0-3
-#define NUMFOOD		4
-static const char *foodnames[NUMFOOD] = {"Never","After 30 s","After 60 s","After 2 min"};
-static const int foodseconds[NUMFOOD] = {0,30,60,120};
-static int		net_food;						// co-op: foodseconds[] (-foodrespawn)
+static int		net_food;						// co-op: seconds (-foodrespawn; 0: never)
+static int		net_itemsecs = 30;				// deathmatch: seconds (-itemrespawn; 0: never)
 static const char *botskillnames[] = {"Easy","Normal","Hard","Vicious"};
 static int		net_frags = 4;					// fragnames[]: 20
 
@@ -396,8 +394,12 @@ static void LoadNet (void)
 		net_bots = 0;
 	if (fscanf (f," botskill=%d",&net_botskill) != 1 || net_botskill < 0 || net_botskill > 3)
 		net_botskill = 1;
-	if (fscanf (f," foodrespawn=%d",&net_food) != 1 || net_food < 0 || net_food >= NUMFOOD)
+	if (fscanf (f," foodrespawn=%d",&net_food) != 1 || net_food < 0 || net_food > 255)
 		net_food = 0;
+	if (net_food >= 1 && net_food <= 3)
+		net_food = net_food*30 + (net_food == 3 ? 30 : 0);	// (older setups kept a choice: 30, 60, 2 min)
+	if (fscanf (f," itemrespawn=%d",&net_itemsecs) != 1 || net_itemsecs < 0 || net_itemsecs > 300)
+		net_itemsecs = 30;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -431,6 +433,7 @@ static void SaveNet (void)
 		fprintf (f,"bots=%d\n",net_bots);
 		fprintf (f,"botskill=%d\n",net_botskill);
 		fprintf (f,"foodrespawn=%d\n",net_food);
+		fprintf (f,"itemrespawn=%d\n",net_itemsecs);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -951,7 +954,8 @@ static const char *KeyName (int scan)
 /* ------------------------------------------------------------------ */
 /* forms: a list of fields, Up/Down to pick, Left/Right to change      */
 
-enum {F_CHOICE,F_NUMBER,F_KEY,F_ACTION,F_TEXT,F_STRING};
+enum {F_CHOICE,F_NUMBER,F_KEY,F_ACTION,F_TEXT,F_STRING,F_SECONDS};
+#define SECSTEP		5			// F_SECONDS: Left/Right change it by this (0: "Never")
 
 typedef struct
 {
@@ -993,6 +997,13 @@ static void ValueText (field_t *f, char *out)
 		break;
 	case F_NUMBER:
 		sprintf (out,"%d",GetValue (f));
+		break;
+	case F_SECONDS:
+		v = GetValue (f);
+		if (v)
+			sprintf (out,"After %d s",v);
+		else
+			strcpy (out,"Never");
 		break;
 	case F_KEY:
 		strcpy (out,KeyName (GetValue (f)));
@@ -1090,7 +1101,16 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 			break;
 		case K_LEFT:
 		case K_RIGHT:
-			if (f->type == F_CHOICE || f->type == F_NUMBER)
+			if (f->type == F_SECONDS)
+			{
+				v = GetValue (f)/SECSTEP*SECSTEP + (scan == K_RIGHT ? SECSTEP : -SECSTEP);
+				if (scan == K_LEFT && GetValue (f) % SECSTEP)
+					v += SECSTEP;			// (an odd one from the CFG: down to the step)
+				if (v > f->max) v = f->max;
+				if (v < f->min) v = f->min;
+				SetValue (f,v);
+			}
+			else if (f->type == F_CHOICE || f->type == F_NUMBER)
 			{
 				v = GetValue (f) + (scan == K_RIGHT ? 1 : -1);
 				if (v > f->max) v = f->type == F_CHOICE ? f->min : f->max;
@@ -1164,6 +1184,12 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 			else if (f->type == F_CHOICE || f->type == F_NUMBER)
 			{
 				v = GetValue (f) + 1;
+				if (v > f->max) v = f->min;
+				SetValue (f,v);
+			}
+			else if (f->type == F_SECONDS)
+			{
+				v = GetValue (f)/SECSTEP*SECSTEP + SECSTEP;
 				if (v > f->max) v = f->min;
 				SetValue (f,v);
 			}
@@ -1392,7 +1418,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4],fd[8];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4],fd[8],ir[8];
 	const char *args[32];
 	int		n,act;
 	field_t	f[] =
@@ -1404,18 +1430,18 @@ static void NetworkScreen (int standalone)
 		{F_NUMBER,"Level",0,1,21,0,0,&net_level},
 		{F_CHOICE,"Skill",0,0,3,skillnames,0,&net_skill},
 		{F_CHOICE,"Friendly fire (co-op)",0,0,1,onoff,0,&net_ff},
-		{F_CHOICE,"Food comes back (co-op)",0,0,NUMFOOD-1,foodnames,0,&net_food},
+		{F_SECONDS,"Food comes back (co-op)",0,0,255,0,0,&net_food},
 		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
+		{F_SECONDS,"Items come back (deathmatch)",0,0,300,0,0,&net_itemsecs},
 		{F_NUMBER,"Bots (deathmatch)",0,0,14,0,0,&net_bots},
 		{F_CHOICE,"Bot skill",0,0,3,botskillnames,0,&net_botskill},
 #ifdef __linux__
 		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
 #endif
-		{F_TEXT,""},
-		{F_ACTION,"Start the network game",0,0,0,0,1},
+		{F_ACTION,"Start the network game",0,0,0,0,1},	// (no room for a blank line)
 	};
 
 	f[3].max = episodes;
@@ -1452,6 +1478,8 @@ static void NetworkScreen (int standalone)
 				args[n++] = "-monsters";
 			args[n++] = "-timelimit"; args[n++] = tl;
 			args[n++] = "-fraglimit"; args[n++] = fl;
+			sprintf (ir,"%d",net_itemsecs);
+			args[n++] = "-itemrespawn"; args[n++] = ir;
 			if (net_bots)
 			{
 				sprintf (bt,"%d",net_bots);
@@ -1474,7 +1502,7 @@ static void NetworkScreen (int standalone)
 			args[n++] = "-nofriendlyfire";
 		if (net_food && !net_dm)
 		{
-			sprintf (fd,"%d",foodseconds[net_food]);
+			sprintf (fd,"%d",net_food);
 			args[n++] = "-foodrespawn"; args[n++] = fd;
 		}
 #ifdef __linux__
