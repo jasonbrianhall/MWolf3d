@@ -136,7 +136,7 @@ void CheckWeaponChange (void)
 =
 = ControlMovement
 =
-= Takes controlx,controly, and buttonstate[bt_strafe]
+= Takes controlx,controly,controlstrafe and buttonstate[bt_strafe]
 =
 = Changes the player's angle and position
 =
@@ -145,6 +145,26 @@ void CheckWeaponChange (void)
 =
 =======================
 */
+
+static void Strafe (objtype *ob, int move)
+{
+	int		angle;
+
+	if (move > 0)
+	{
+		angle = ob->angle - ANGLES/4;
+		if (angle < 0)
+			angle += ANGLES;
+		Thrust (angle,move*MOVESCALE);		// move to the right
+	}
+	else if (move < 0)
+	{
+		angle = ob->angle + ANGLES/4;
+		if (angle >= ANGLES)
+			angle -= ANGLES;
+		Thrust (angle,-move*MOVESCALE);		// move to the left
+	}
+}
 
 void ControlMovement (objtype *ob)
 {
@@ -164,26 +184,14 @@ void ControlMovement (objtype *ob)
 	if (buttonstate[bt_strafe])
 	{
 	//
-	// strafing
+	// strafing (the controls fold the strafe keys into controlx then)
 	//
-	//
-		if (controlx > 0)
-		{
-			angle = ob->angle - ANGLES/4;
-			if (angle < 0)
-				angle += ANGLES;
-			Thrust (angle,controlx*MOVESCALE);	// move to left
-		}
-		else if (controlx < 0)
-		{
-			angle = ob->angle + ANGLES/4;
-			if (angle >= ANGLES)
-				angle -= ANGLES;
-			Thrust (angle,-controlx*MOVESCALE);	// move to right
-		}
+		Strafe (ob,controlx);
 	}
 	else
 	{
+		Strafe (ob,controlstrafe);			// keystrafe: the keys strafe, the mouse turns
+
 	//
 	// not strafing
 	//

@@ -92,6 +92,7 @@ typedef struct
 	byte	buttons;
 	byte	event;				// EV_JOIN|slot: the arbiter lets a player in
 	short	x,y;
+	short	strafe;				// controlstrafe (keystrafe)
 } __attribute__((packed)) netcmd_t;
 
 #define EV_JOIN		0x80
@@ -139,7 +140,7 @@ typedef struct
 	int		anglefrac,gotgatgun,facecount;
 	long	playerxmove,playerymove;
 	objtype	*lastattacker;
-	int		controlx,controly;
+	int		controlx,controly,controlstrafe;
 	boolean	buttonstate[NUMBUTTONS],buttonheld[NUMBUTTONS];
 
 	// not swapped
@@ -338,6 +339,7 @@ static void SaveContext (netplayer_t *p)
 	p->lastattacker = LastAttacker;
 	p->controlx = controlx;
 	p->controly = controly;
+	p->controlstrafe = controlstrafe;
 	memcpy (p->buttonstate,buttonstate,sizeof(buttonstate));
 	memcpy (p->buttonheld,buttonheld,sizeof(buttonheld));
 }
@@ -370,6 +372,7 @@ static void LoadContext (netplayer_t *p)
 	LastAttacker = p->lastattacker;
 	controlx = p->controlx;
 	controly = p->controly;
+	controlstrafe = p->controlstrafe;
 	memcpy (buttonstate,p->buttonstate,sizeof(buttonstate));
 	memcpy (buttonheld,p->buttonheld,sizeof(buttonheld));
 
@@ -2153,7 +2156,7 @@ static char *AddrStr (byte *a)
 enum {pk_hello=1,pk_tics,pk_quit,pk_chat,pk_query,pk_info,pk_join,pk_snap,pk_snapack,pk_full,pk_drop,
 	pk_ping,pk_pong,pk_bottics,pk_need};
 
-#define NETVERSION	9
+#define NETVERSION	10
 
 typedef struct
 {
@@ -4087,7 +4090,7 @@ static long Unpack (byte *in, long len, byte *out, long max)
 	F(bestweapon) F(weapon) F(chosenweapon) F(faceframe) F(attackframe) \
 	F(attackcount) F(weaponframe) F(thrustspeed) F(plux) F(pluy) F(anglefrac) \
 	F(gotgatgun) F(facecount) F(playerxmove) F(playerymove) F(controlx) \
-	F(controly) F(dead) F(removed) F(respawn) F(spawnx) F(spawny) \
+	F(controly) F(controlstrafe) F(dead) F(removed) F(respawn) F(spawnx) F(spawny) \
 	F(spawnangle) F(anim) F(moving) F(pain) F(gone) F(lastframe) F(firstcmd) \
 	F(frags) F(deaths) F(bot)
 
@@ -5452,7 +5455,7 @@ void NetLevelStart (void)
 		anglefrac = 0;
 		facecount = 0;
 		gotgatgun = 0;
-		controlx = controly = 0;
+		controlx = controly = controlstrafe = 0;
 		memset (buttonstate,0,sizeof(buttonstate));
 		memset (buttonheld,0,sizeof(buttonheld));
 		plux = player->x >> UNSIGNEDSHIFT;
@@ -5496,14 +5499,15 @@ void NetLevelStart (void)
 
 static void SampleControls (netcmd_t *cmd)
 {
-	int		i,max,savex,savey;
+	int		i,max,savex,savey,saves;
 	byte	bits;
 	boolean	savestate[NUMBUTTONS];
 
 	savex = controlx;
 	savey = controly;
+	saves = controlstrafe;
 	memcpy (savestate,buttonstate,sizeof(savestate));
-	controlx = controly = 0;
+	controlx = controly = controlstrafe = 0;
 	memset (buttonstate,0,sizeof(buttonstate));
 
 	PollKeyboardButtons ();
@@ -5517,8 +5521,15 @@ static void SampleControls (netcmd_t *cmd)
 		PollMouseMove ();
 	if (joystickenabled)
 		PollJoystickMove ();
+	if (buttonstate[bt_strafe])			// everything strafes, as one
+	{
+		controlx += controlstrafe;
+		controlstrafe = 0;
+	}
 
 	max = 100*tics;
+	if (controlstrafe > max) controlstrafe = max;
+	if (controlstrafe < -max) controlstrafe = -max;
 	if (controlx > max) controlx = max;
 	if (controlx < -max) controlx = -max;
 	if (controly > max) controly = max;
@@ -5535,11 +5546,13 @@ static void SampleControls (netcmd_t *cmd)
 	cmd->event = 0;
 	cmd->x = controlx;
 	cmd->y = controly;
+	cmd->strafe = controlstrafe;
 	if (chatting)					// the keys are for the message
 		memset (cmd,0,sizeof(*cmd));
 
 	controlx = savex;
 	controly = savey;
+	controlstrafe = saves;
 	memcpy (buttonstate,savestate,sizeof(savestate));
 }
 
@@ -5577,6 +5590,7 @@ static void ApplyCmd (int p, long f)
 	}
 	controlx = cmd->x;
 	controly = cmd->y;
+	controlstrafe = cmd->strafe;
 }
 
 
@@ -5822,7 +5836,7 @@ static void DMJoin (int k, long f, boolean bot)
 	anglefrac = 0;
 	facecount = 0;
 	gotgatgun = 0;
-	controlx = controly = 0;
+	controlx = controly = controlstrafe = 0;
 	memset (buttonstate,0,sizeof(buttonstate));
 	memset (buttonheld,0,sizeof(buttonheld));
 	LastAttacker = NULL;
@@ -5967,7 +5981,7 @@ static void RunFrame (long f)
 		if (dmtimeup)
 		{
 			memset (buttonstate,0,sizeof(buttonstate));
-			controlx = controly = 0;
+			controlx = controly = controlstrafe = 0;
 		}
 		if (np[i].gone && f > np[i].lastframe && !np[i].removed)
 		{

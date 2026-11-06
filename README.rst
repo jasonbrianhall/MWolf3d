@@ -38,7 +38,13 @@ shared with the original; saved games are not.
 ``make setup`` builds ``setup.exe`` and ``ipxsetup.exe`` (one program
 for every version: it finds the data in the current directory). SETUP
 edits the ``CONFIG`` file in blue DOS screens: sound, keys, mouse,
-joystick, view size. IPXSETUP opens on the co-op menu (players,
+joystick, view size. Its Keyboard screen can make the left and right
+keys strafe instead of turn ("Left and right: Strafe"), for turning with
+the mouse; set those two keys to A and D for the modern layout. Mouse
+sensitivity goes up to 20 (the original's 0-9 are as they were; the
+original game only knows 0-9, so don't share a CONFIG set higher with it). (It's
+kept after id's fields in ``CONFIG``, so the original game still reads
+the file; demos don't record it, so the keys turn while one is made.) IPXSETUP opens on the co-op menu (players,
 episode, level, skill, friendly fire) and runs the game; with options
 (``ipxsetup -nodes 3 -level 2``) it runs it straight away.
 

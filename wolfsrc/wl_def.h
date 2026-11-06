@@ -777,7 +777,8 @@ extern	int			shootdelta;
 extern	int			dirangle[9];
 
 extern	boolean         startgame,loadedgame,virtualreality;
-extern	int		mouseadjustment;
+extern	int		mouseadjustment;		// 0-MAXMOUSEADJ (id's 0-9, then on up for mouse turning)
+#define	MAXMOUSEADJ	20
 //
 // math tables
 //
@@ -909,6 +910,8 @@ extern	int			viewsize;
 // curent user input
 //
 extern	int			controlx,controly;		// range from -100 to 100
+extern	int			controlstrafe;			// sideways, apart from controlx (keystrafe)
+extern	boolean		keystrafe;				// the left/right keys strafe (CONFIG)
 extern	boolean		buttonstate[NUMBUTTONS];
 
 extern	boolean		demorecord,demoplayback;

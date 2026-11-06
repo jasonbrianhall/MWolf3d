@@ -213,7 +213,7 @@ static void ShowHelp (void)
 "  -sfx off|pc|adlib        sound effects\n"
 "  -music off|adlib         music\n"
 "  -digi off|sb             digitized sound\n"
-"  -mouse on|off            -sensitivity 0-9\n"
+"  -mouse on|off            -sensitivity 0-20\n"
 "  -viewsize 4-20           size of the 3D view (20: no border)\n"
 "  -defaults                ignore the CONFIG file\n"
 "  nowait                   skip the intro screens; nomouse: don't use the mouse\n"
@@ -253,7 +253,7 @@ static void ShowHelp (void)
 "  -music off|adlib         music\n"
 "  -digi off|sb|ss          digitized sound (Sound Blaster, Sound Source)\n"
 "  -mouse on|off            -joystick off|1|2\n"
-"  -sensitivity 0-9         mouse sensitivity\n"
+"  -sensitivity 0-20        mouse sensitivity (10-20: faster than the original)\n"
 "  -viewsize 4-20           size of the 3D view (20: no border)\n"
 "  -defaults                ignore the CONFIG file (detect the hardware)\n"
 "  -timing                  write how long each startup step took to STARTUP.TXT\n"
@@ -344,7 +344,7 @@ static void CommandLineConfig (SDMode *sd, SMMode *sm, SDSMode *sds)
 	}
 
 	v = ArgValue ("sensitivity");
-	if (v && atoi (v) >= 0 && atoi (v) <= 9)
+	if (v && atoi (v) >= 0 && atoi (v) <= MAXMOUSEADJ)
 		mouseadjustment = atoi (v);
 
 	v = ArgValue ("viewsize");
@@ -393,6 +393,7 @@ void ReadConfig(void)
 
 		viewsize = CfgRead(file);
 		mouseadjustment = CfgRead(file);
+		keystrafe = CfgRead(file) == 1;		// (after id's fields: 0 if it isn't there)
 
 		close(file);
 
@@ -407,7 +408,7 @@ void ReadConfig(void)
 			joystickport = 0;
 		if (viewsize < 4 || viewsize > 20)
 			viewsize = 15;
-		if (mouseadjustment < 0 || mouseadjustment > 9)
+		if (mouseadjustment < 0 || mouseadjustment > MAXMOUSEADJ)
 			mouseadjustment = 5;
 
 		if (sd == sdm_AdLib && !AdLibPresent && !SoundBlasterPresent)
@@ -507,6 +508,7 @@ void WriteConfig(void)
 
 		CfgWrite(file,viewsize);
 		CfgWrite(file,mouseadjustment);
+		CfgWrite(file,keystrafe);
 
 		close(file);
 	}
