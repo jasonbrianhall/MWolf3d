@@ -237,7 +237,7 @@ static void LoadConfig (void)
 	if (cfg.sm < 0 || cfg.sm > 1) cfg.sm = 0;
 	if (cfg.sds < 0 || cfg.sds > 4) cfg.sds = 0;
 	if (cfg.viewsize < 4 || cfg.viewsize > 20) cfg.viewsize = 15;
-	if (cfg.mouseadjustment < 0 || cfg.mouseadjustment > 9) cfg.mouseadjustment = 5;
+	if (cfg.mouseadjustment < 0 || cfg.mouseadjustment > 20) cfg.mouseadjustment = 5;
 	if (cfg.joystickport < 0 || cfg.joystickport > 1) cfg.joystickport = 0;
 	if (cfg.keystrafe != 1) cfg.keystrafe = 0;
 }
@@ -1275,7 +1275,7 @@ static void MouseScreen (void)
 	field_t	f[] =
 	{
 		{F_CHOICE,"Mouse",&cfg.mouseenabled,0,1,onoff},
-		{F_NUMBER,"Mouse sensitivity",&cfg.mouseadjustment,0,9},
+		{F_NUMBER,"Mouse sensitivity",&cfg.mouseadjustment,0,20},
 		{F_CHOICE,"Left button",&mb[0],0,4,mbuttons},
 		{F_CHOICE,"Right button",&mb[1],0,4,mbuttons},
 		{F_CHOICE,"Middle button",&mb[2],0,4,mbuttons},

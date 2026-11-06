@@ -1824,6 +1824,16 @@ void CP_Control(void)
 }
 
 
+// the knob on the sensitivity bar: 0-MAXMOUSEADJ along its 200 pixels
+// (id's had 10 steps of 20)
+static void DrawSensKnob (void)
+{
+	int x = 60 + mouseadjustment*(200-20)/MAXMOUSEADJ;
+
+	DrawOutline(x,97,20,10,0,READCOLOR);
+	VWB_Bar(x+1,98,19,9,READHCOLOR);
+}
+
 ////////////////////////////////
 //
 // DRAW MOUSE SENSITIVITY SCREEN
@@ -1865,8 +1875,7 @@ void DrawMouseSens(void)
 
 	VWB_Bar(60,97,200,10,TEXTCOLOR);
 	DrawOutline(60,97,200,10,0,HIGHLIGHT);
-	DrawOutline(60+20*mouseadjustment,97,20,10,0,READCOLOR);
-	VWB_Bar(61+20*mouseadjustment,98,19,9,READHCOLOR);
+	DrawSensKnob ();
 
 	VW_UpdateScreen();
 	MenuFadeIn();
@@ -1897,8 +1906,7 @@ void MouseSensitivity(void)
 					mouseadjustment--;
 					VWB_Bar(60,97,200,10,TEXTCOLOR);
 					DrawOutline(60,97,200,10,0,HIGHLIGHT);
-					DrawOutline(60+20*mouseadjustment,97,20,10,0,READCOLOR);
-					VWB_Bar(61+20*mouseadjustment,98,19,9,READHCOLOR);
+					DrawSensKnob ();
 					VW_UpdateScreen();
 					SD_PlaySound(MOVEGUN1SND);
 					while(Keyboard[sc_LeftArrow]);
@@ -1908,13 +1916,12 @@ void MouseSensitivity(void)
 
 			case dir_South:
 			case dir_East:
-				if (mouseadjustment<9)
+				if (mouseadjustment<MAXMOUSEADJ)
 				{
 					mouseadjustment++;
 					VWB_Bar(60,97,200,10,TEXTCOLOR);
 					DrawOutline(60,97,200,10,0,HIGHLIGHT);
-					DrawOutline(60+20*mouseadjustment,97,20,10,0,READCOLOR);
-					VWB_Bar(61+20*mouseadjustment,98,19,9,READHCOLOR);
+					DrawSensKnob ();
 					VW_UpdateScreen();
 					SD_PlaySound(MOVEGUN1SND);
 					while(Keyboard[sc_RightArrow]);

@@ -777,7 +777,8 @@ extern	int			shootdelta;
 extern	int			dirangle[9];
 
 extern	boolean         startgame,loadedgame,virtualreality;
-extern	int		mouseadjustment;
+extern	int		mouseadjustment;		// 0-MAXMOUSEADJ (id's 0-9, then on up for mouse turning)
+#define	MAXMOUSEADJ	20
 //
 // math tables
 //

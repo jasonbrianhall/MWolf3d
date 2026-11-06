@@ -389,8 +389,16 @@ void PollMouseMove (void)
 	mousexmove = (short)IN_MouseRegs.x.cx;
 	mouseymove = (short)IN_MouseRegs.x.dx;
 
-	controlx += mousexmove*10/(13-mouseadjustment);
-	controly += mouseymove*20/(13-mouseadjustment);
+	if (mouseadjustment <= 9)			// id's, as it was
+	{
+		controlx += mousexmove*10/(13-mouseadjustment);
+		controly += mouseymove*20/(13-mouseadjustment);
+	}
+	else								// on up from 9's 2.5 (and 5), by .5 (and 1) a step
+	{
+		controlx += mousexmove*(mouseadjustment-4)/2;
+		controly += mouseymove*(mouseadjustment-4);
+	}
 }
 
 
