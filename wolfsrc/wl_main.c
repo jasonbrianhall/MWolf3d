@@ -393,6 +393,7 @@ void ReadConfig(void)
 
 		viewsize = CfgRead(file);
 		mouseadjustment = CfgRead(file);
+		keystrafe = CfgRead(file) == 1;		// (after id's fields: 0 if it isn't there)
 
 		close(file);
 
@@ -507,6 +508,7 @@ void WriteConfig(void)
 
 		CfgWrite(file,viewsize);
 		CfgWrite(file,mouseadjustment);
+		CfgWrite(file,keystrafe);
 
 		close(file);
 	}

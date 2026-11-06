@@ -75,6 +75,9 @@ memptr		demobuffer;
 // curent user input
 //
 int			controlx,controly;		// range from -100 to 100 per tic
+int			controlstrafe;			// sideways (+ right), apart from controlx
+boolean		keystrafe;				// the left/right keys strafe, not turn: the
+									// mouse turns (CONFIG; not in demos)
 boolean		buttonstate[NUMBUTTONS];
 
 
@@ -340,6 +343,11 @@ void PollJoystickButtons (void)
 
 void PollKeyboardMove (void)
 {
+	int	*side;
+
+	// keystrafe: left/right strafe (a demo has no room for it)
+	side = keystrafe && !demorecord && !demoplayback ? &controlstrafe : &controlx;
+
 	if (buttonstate[bt_run])
 	{
 		if (Keyboard[dirscan[di_north]])
@@ -347,9 +355,9 @@ void PollKeyboardMove (void)
 		if (Keyboard[dirscan[di_south]])
 			controly += RUNMOVE*tics;
 		if (Keyboard[dirscan[di_west]])
-			controlx -= RUNMOVE*tics;
+			*side -= RUNMOVE*tics;
 		if (Keyboard[dirscan[di_east]])
-			controlx += RUNMOVE*tics;
+			*side += RUNMOVE*tics;
 	}
 	else
 	{
@@ -358,9 +366,9 @@ void PollKeyboardMove (void)
 		if (Keyboard[dirscan[di_south]])
 			controly += BASEMOVE*tics;
 		if (Keyboard[dirscan[di_west]])
-			controlx -= BASEMOVE*tics;
+			*side -= BASEMOVE*tics;
 		if (Keyboard[dirscan[di_east]])
-			controlx += BASEMOVE*tics;
+			*side += BASEMOVE*tics;
 	}
 }
 
@@ -484,6 +492,7 @@ void PollControls (void)
 
 	controlx = 0;
 	controly = 0;
+	controlstrafe = 0;
 	memcpy (buttonheld,buttonstate,sizeof(buttonstate));
 	memset (buttonstate,0,sizeof(buttonstate));
 
@@ -534,6 +543,12 @@ void PollControls (void)
 	if (joystickenabled)
 		PollJoystickMove ();
 
+	if (buttonstate[bt_strafe])			// everything strafes, as one
+	{
+		controlx += controlstrafe;
+		controlstrafe = 0;
+	}
+
 //
 // bound movement to a maximum
 //
@@ -548,6 +563,11 @@ void PollControls (void)
 		controly = max;
 	else if (controly < min)
 		controly = min;
+
+	if (controlstrafe > max)
+		controlstrafe = max;
+	else if (controlstrafe < min)
+		controlstrafe = min;
 
 	if (demorecord)
 	{

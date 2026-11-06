@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stddef.h>
 #include <ctype.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -72,7 +73,9 @@ typedef struct
 	int16_t			buttonmouse[4];
 	int16_t			buttonjoy[4];
 	int16_t			viewsize,mouseadjustment;
+	int16_t			keystrafe;		// (ours, after id's: the left/right keys strafe)
 } config_t;
+#define OLDCFGSIZE	(offsetof (config_t,keystrafe))	// id's CONFIG, and ours before keystrafe
 #pragma pack(pop)
 
 static config_t	cfg;
@@ -224,7 +227,7 @@ static void LoadConfig (void)
 	haveconfig = 0;
 	if (!f)
 		return;
-	if (fread (&cfg,1,sizeof(cfg),f) == sizeof(cfg))
+	if (fread (&cfg,1,sizeof(cfg),f) >= OLDCFGSIZE)	// (keystrafe stays 0 if it isn't there)
 		haveconfig = 1;
 	else
 		DefaultConfig ();
@@ -236,6 +239,7 @@ static void LoadConfig (void)
 	if (cfg.viewsize < 4 || cfg.viewsize > 20) cfg.viewsize = 15;
 	if (cfg.mouseadjustment < 0 || cfg.mouseadjustment > 9) cfg.mouseadjustment = 5;
 	if (cfg.joystickport < 0 || cfg.joystickport > 1) cfg.joystickport = 0;
+	if (cfg.keystrafe != 1) cfg.keystrafe = 0;
 }
 
 /* chat macros for co-op (Alt+1..Alt+0 while typing a message), CHATMACS.CFG */
@@ -1209,6 +1213,7 @@ static const char *diginames[] = {"Off","Off (PC Speaker)","Off (Sound Source)",
 static const char *diginames[] = {"Off","PC Speaker","Sound Source","Sound Blaster / UltraSound"};
 #endif
 static const char *onoff[] = {"Off","On"};
+static const char *leftright[] = {"Turn","Strafe"};
 static const char *mbuttons[] = {"(nothing)","Fire","Strafe","Run","Open / Use"};
 static const char *joynames[] = {"Off","Port 1","Port 2"};
 static const char *skillnames[] =
@@ -1244,8 +1249,9 @@ static void KeyboardScreen (void)
 	{
 		{F_KEY,"Move forward",&cfg.dirscan[0]},
 		{F_KEY,"Move backward",&cfg.dirscan[2]},
-		{F_KEY,"Turn left",&cfg.dirscan[3]},
-		{F_KEY,"Turn right",&cfg.dirscan[1]},
+		{F_KEY,"Left (turn / strafe)",&cfg.dirscan[3]},
+		{F_KEY,"Right (turn / strafe)",&cfg.dirscan[1]},
+		{F_CHOICE,"Left and right",&cfg.keystrafe,0,1,leftright},
 		{F_KEY,"Fire",&cfg.buttonscan[0]},
 		{F_KEY,"Strafe",&cfg.buttonscan[1]},
 		{F_KEY,"Run",&cfg.buttonscan[2]},
@@ -1256,7 +1262,8 @@ static void KeyboardScreen (void)
 		{F_KEY,"Chain gun",&cfg.buttonscan[7]},
 	};
 
-	while (Form ("Keyboard",f,12,&cursor,"Enter, then the key. Del clears.") != -1)
+	while (Form ("Keyboard",f,13,&cursor,
+		"Enter, then the key. Del clears. Strafe: the mouse turns.") != -1)
 		;
 }
 

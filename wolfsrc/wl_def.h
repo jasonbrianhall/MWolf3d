@@ -909,6 +909,8 @@ extern	int			viewsize;
 // curent user input
 //
 extern	int			controlx,controly;		// range from -100 to 100
+extern	int			controlstrafe;			// sideways, apart from controlx (keystrafe)
+extern	boolean		keystrafe;				// the left/right keys strafe (CONFIG)
 extern	boolean		buttonstate[NUMBUTTONS];
 
 extern	boolean		demorecord,demoplayback;
