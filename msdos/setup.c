@@ -360,6 +360,12 @@ static int		net_botskill = 1;				// -botskill 0-3
 static const char *foodnames[NUMFOOD] = {"Never","After 30 s","After 60 s","After 2 min"};
 static const int foodseconds[NUMFOOD] = {0,30,60,120};
 static int		net_food;						// co-op: foodseconds[] (-foodrespawn)
+#define NUMITEMS	6
+static const char *itemnames[NUMITEMS] =
+	{"Never","After 15 s","After 30 s","After 60 s","After 2 min","After 5 min"};
+static const int itemseconds[NUMITEMS] = {0,15,30,60,120,300};
+static int		net_itemsecs = 30;				// deathmatch: -itemrespawn
+static int		net_items = 2;					// itemnames[]: 30 s
 static const char *botskillnames[] = {"Easy","Normal","Hard","Vicious"};
 static int		net_frags = 4;					// fragnames[]: 20
 
@@ -398,6 +404,8 @@ static void LoadNet (void)
 		net_botskill = 1;
 	if (fscanf (f," foodrespawn=%d",&net_food) != 1 || net_food < 0 || net_food >= NUMFOOD)
 		net_food = 0;
+	if (fscanf (f," itemrespawn=%d",&net_itemsecs) != 1 || net_itemsecs < 0 || net_itemsecs > 300)
+		net_itemsecs = 30;
 	fclose (f);
 	if (net_nodes < 2 || net_nodes > 4) net_nodes = 2;
 	if (net_episode < 1 || net_episode > episodes) net_episode = 1;
@@ -409,6 +417,8 @@ static void LoadNet (void)
 		;
 	for (net_frags=0;net_frags<NUMFRAGS-1 && fragcounts[net_frags] < net_fraglimit;net_frags++)
 		;
+	for (net_items=0;net_items<NUMITEMS-1 && itemseconds[net_items] < net_itemsecs;net_items++)
+		;
 }
 
 static void SaveNet (void)
@@ -417,6 +427,8 @@ static void SaveNet (void)
 		net_timelimit = timeminutes[net_time];
 	if (net_frags >= 0 && net_frags < NUMFRAGS)
 		net_fraglimit = fragcounts[net_frags];
+	if (net_items >= 0 && net_items < NUMITEMS)
+		net_itemsecs = itemseconds[net_items];
 
 	FILE *f = fopen ("WOLFNET.CFG","w");
 
@@ -431,6 +443,7 @@ static void SaveNet (void)
 		fprintf (f,"bots=%d\n",net_bots);
 		fprintf (f,"botskill=%d\n",net_botskill);
 		fprintf (f,"foodrespawn=%d\n",net_food);
+		fprintf (f,"itemrespawn=%d\n",net_itemsecs);
 		fclose (f);
 	}
 	if (strcmp (net_name,oldname) && (f = fopen ("NAME.CFG","w")) != NULL)
@@ -1392,7 +1405,7 @@ static const char *netnames[] =
 static void NetworkScreen (int standalone)
 {
 	static int cursor;
-	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4],fd[8];
+	char	nodes[4],ep[4],lv[4],sk[4],tl[8],fl[8],bt[8],bs[4],fd[8],ir[8];
 	const char *args[32];
 	int		n,act;
 	field_t	f[] =
@@ -1408,14 +1421,14 @@ static void NetworkScreen (int standalone)
 		{F_CHOICE,"Enemies (deathmatch)",0,0,1,onoff,0,&net_monsters},
 		{F_CHOICE,"Time a level (deathmatch)",0,0,NUMTIMES-1,timenames,0,&net_time},
 		{F_CHOICE,"Frags to win (deathmatch)",0,0,NUMFRAGS-1,fragnames,0,&net_frags},
+		{F_CHOICE,"Items come back (deathmatch)",0,0,NUMITEMS-1,itemnames,0,&net_items},
 		{F_NUMBER,"Bots (deathmatch)",0,0,14,0,0,&net_bots},
 		{F_CHOICE,"Bot skill",0,0,3,botskillnames,0,&net_botskill},
 #ifdef __linux__
 		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
 #endif
-		{F_TEXT,""},
-		{F_ACTION,"Start the network game",0,0,0,0,1},
+		{F_ACTION,"Start the network game",0,0,0,0,1},	// (no room for a blank line)
 	};
 
 	f[3].max = episodes;
@@ -1452,6 +1465,8 @@ static void NetworkScreen (int standalone)
 				args[n++] = "-monsters";
 			args[n++] = "-timelimit"; args[n++] = tl;
 			args[n++] = "-fraglimit"; args[n++] = fl;
+			sprintf (ir,"%d",net_itemsecs);
+			args[n++] = "-itemrespawn"; args[n++] = ir;
 			if (net_bots)
 			{
 				sprintf (bt,"%d",net_bots);
