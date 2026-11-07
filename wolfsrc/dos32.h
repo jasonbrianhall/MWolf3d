@@ -9,7 +9,12 @@
 #ifndef __DOS32_H__
 #define __DOS32_H__
 
-#ifdef __linux__
+// Linux and Windows: the PC is sys_linux.c's, made of SDL2
+#if (defined(__linux__) || defined(_WIN32)) && !defined(SYS_SDL)
+#define SYS_SDL
+#endif
+
+#ifdef SYS_SDL
 #include "sys_linux.h"
 #else
 
@@ -68,6 +73,6 @@ void DOS32_Mark (char *what);		// -timing: STARTUP.TXT
 void DOS32_WriteMarks (void);
 long DOS32_MemoryFree (void);	// bytes the DPMI host can still give us
 
-#endif	// __linux__
+#endif	// SYS_SDL
 
 #endif

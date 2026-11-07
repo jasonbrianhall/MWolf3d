@@ -39,7 +39,7 @@
 #endif
 #pragma	hdrstop
 #pragma	warn	-pia
-#ifdef __linux__
+#ifdef SYS_SDL
 #undef TimeCount			// this is where it lives
 #endif
 

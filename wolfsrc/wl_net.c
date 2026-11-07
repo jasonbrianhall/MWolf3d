@@ -26,7 +26,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include "wl_def.h"
-#ifndef __linux__
+#ifndef SYS_SDL
 #include <dpmi.h>
 #include <go32.h>
 #include <sys/farptr.h>
@@ -271,7 +271,7 @@ void GameLog (char *fmt, ...)
 	va_start (ap,fmt);
 	vsnprintf (line,sizeof(line),fmt,ap);
 	va_end (ap);
-#ifdef __linux__
+#ifdef SYS_SDL
 	fprintf (stderr,"[wolf3d] %s\n",line);
 #endif
 	LogLine (line);
@@ -1809,7 +1809,7 @@ int NetPlayerShape (objtype *ob)
 =============================================================================
 */
 
-#ifndef __linux__
+#ifndef SYS_SDL
 
 #define IPX_SOCKET	0x7135
 #define PKTMAX		200
@@ -2019,7 +2019,7 @@ static int IPXGet (void *buf, byte *from)
 	return 0;
 }
 
-#else	// __linux__
+#else	// SYS_SDL
 
 /*
 -----------------------------------------------------------------------------
@@ -2119,7 +2119,7 @@ static int IPXGet (void *buf, byte *from)
 	return SYS_NetGet (buf,PKTMAX,from);
 }
 
-#endif	// __linux__
+#endif	// SYS_SDL
 
 // an address, for the log
 static char *AddrStr (byte *a)
@@ -2128,7 +2128,7 @@ static char *AddrStr (byte *a)
 	static int	n;
 	char	*s = str[n++ & 3];
 
-#ifdef __linux__
+#ifdef SYS_SDL
 	if (!ipxnet)
 	{
 		sprintf (s,"%d.%d.%d.%d:%d",a[0],a[1],a[2],a[3],(a[4]<<8)|a[5]);
@@ -3369,7 +3369,7 @@ static boolean BotMakeRoom (void)
 //
 static unsigned long NetMillis (void)
 {
-#ifdef __linux__
+#ifdef SYS_SDL
 	return SYS_Millis ();
 #else
 	return (unsigned long)TimeCount*1000/70;
@@ -4813,7 +4813,7 @@ static void NetTransport (void)
 
 	if (!IPXStartup ())
 	{
-#ifdef __linux__
+#ifdef SYS_SDL
 		NetSay (tcpnet || Parm ("-tcp") || Parm ("-tcpserver")
 			? "Can't start the network (TCP: the server not there, or the port in use?).\n"
 			: "Can't start the network (UDP port in use? -port N for another).\n");
@@ -4824,7 +4824,7 @@ static void NetTransport (void)
 	}
 	atexit (NetShutdown);
 
-#ifdef __linux__
+#ifdef SYS_SDL
 	if (!ipxnet)
 	{
 		byte	ifs[8][10];
@@ -4875,7 +4875,7 @@ static void NetTransport (void)
 #else
 	GameLog ("Network: IPX; our address %s",AddrStr (myaddr));
 #endif
-#ifdef __linux__
+#ifdef SYS_SDL
 	{
 		struct timespec ts;
 		clock_gettime (CLOCK_MONOTONIC,&ts);
@@ -5023,7 +5023,7 @@ static void NetStartupDM (void)
 				NetSay ("Aborted.\n");
 				exit (1);
 			}
-#ifdef __linux__
+#ifdef SYS_SDL
 			SYS_Sleep ();
 #endif
 		}
@@ -5276,7 +5276,7 @@ void NetStartup (void)
 			NetSay ("Aborted.\n");
 			exit (1);
 		}
-#ifdef __linux__
+#ifdef SYS_SDL
 		SYS_Sleep ();
 #endif
 	}
@@ -5759,7 +5759,7 @@ static void WaitForFrame (long f)
 			sprintf (str,"Lost contact with %s",NetName (i));
 			Quit (str);
 		}
-#ifdef __linux__
+#ifdef SYS_SDL
 		SYS_Sleep ();
 #endif
 	}
@@ -6147,7 +6147,7 @@ static void NetCheckKeys (void)
 				Quit (NULL);			// NetShutdown tells them
 			if (Keyboard[sc_N] || Keyboard[sc_Escape])
 				break;
-#ifdef __linux__
+#ifdef SYS_SDL
 			SYS_Sleep ();
 #endif
 		}
@@ -6277,7 +6277,7 @@ static void JoinGame (void)
 			Quit (NULL);
 		if (TimeCount - start > 70*40)
 			Quit ("No answer from the network game");
-#ifdef __linux__
+#ifdef SYS_SDL
 		SYS_Sleep ();
 #endif
 	}
@@ -6384,7 +6384,7 @@ void NetPlayLoop (void)
 		while (TimeCount < lasttimecount+NETTICS)
 		{
 			NetReceive ();
-#ifdef __linux__
+#ifdef SYS_SDL
 			SYS_Sleep ();
 #endif
 		}
@@ -6470,7 +6470,7 @@ void NetPlayLoop (void)
 			SendTics (pk_tics);
 			lastsend = TimeCount;
 		}
-#ifdef __linux__
+#ifdef SYS_SDL
 		SYS_Sleep ();
 #endif
 	}

@@ -306,7 +306,36 @@ IPXSETUP's "Network" line picks UDP, joining an IPXNET server or being
 one, or TCP (connecting to a server, or being one). (Ports below 1024 need root on Linux, so pick something like 21300
 for DOSBox's server there too.) No joysticks yet.
 
-The original source release was made using the ``DEICE.EXE``
+Windows
+-------
+
+The Linux version builds for Windows too: ``sys_linux.c`` and
+``sys_midi.c`` have the Windows parts (Winsock for the network, Windows's
+MIDI out for "the system's MIDI"), and SETUP / IPXSETUP draw their blue
+screens in a console window. It's cross-compiled with MinGW-w64, against
+SDL2's MinGW development files (``SDL2-devel-2.x-mingw.tar.gz``), and
+linked statically, so the .exe needs no DLLs::
+
+  sudo apt install mingw-w64
+  cd windows
+  make SDL2=/path/to/SDL2-2.30.9/x86_64-w64-mingw32        # wolf3d.exe, setup.exe
+  make SDL2=... VERSION=sod                                  # spear.exe
+  make SDL2=... release                                      # release\WL6, WL1, SOD...
+  make SDL2=... msi                                          # (needs msitools' wixl)
+
+The GitHub workflow builds it the same way, then the installer
+(``wolf3d-windows-x64-*.msi``) with WiX 3, and a portable zip. The
+installer is per user (no administrator): it puts a folder for each game
+(WL6, WL6APO, WL1, SOD, SDM) in ``%LOCALAPPDATA%\Programs\Wolfenstein 3-D``,
+where the data files go (the Start menu's "Game folders" opens it), with
+Start menu shortcuts for Wolfenstein 3-D, Spear of Destiny and their
+SETUPs. Without data files the game says where to put them. ``-data
+FOLDER`` works as on Linux. The options are Linux's, but
+``-mididev system`` (or ``system:NAME``) is Windows's MIDI out (the
+Microsoft GS Wavetable Synth, a VirtualMIDISynth...), and FluidSynth is
+``libfluidsynth-3.dll`` next to the game if it's there.
+
+
 installer (DeIce) in the root directory.  (Basically a way to
 split self-extracting zip files over multiple floppy disks.)
 After execution, that installer will create the contents of

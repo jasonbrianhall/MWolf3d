@@ -206,7 +206,7 @@ boolean MIDI_Startup (void)
 	}
 	if (port < 0x200 || port > 0x3ff)
 		port = 0x330;
-#ifdef __linux__
+#ifdef SYS_SDL
 	port = 0x330;				// where sys_midi.c answers
 	forced = true;
 #endif
@@ -767,7 +767,7 @@ static boolean FindSong (char *name)
 		sprintf (songname,"%s/%s.MID",*d,name);
 		if (ReadSong (songname))
 			return true;
-#ifndef __linux__
+#ifndef SYS_SDL
 		break;						// DOS doesn't care about case
 #endif
 	}
@@ -795,12 +795,12 @@ boolean MIDI_LoadSong (MusicGroup *music)
 	if (SongName (music,name))
 		found = FindSong (name);
 	if (!found && (InfoName ("MUSIC",music->length,name)
-#ifdef __linux__
+#ifdef SYS_SDL
 		|| InfoName ("music",music->length,name)
 #endif
 		))
 		found = FindSong (name);
-#ifdef __linux__
+#ifdef SYS_SDL
 	if (found)
 		SYS_MidiOpen ();			// what plays it (a SoundFont takes a moment to load)
 #endif

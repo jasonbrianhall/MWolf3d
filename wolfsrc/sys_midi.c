@@ -21,6 +21,11 @@
 // -mididev picks one; else CONFIG's (SETUP, wl_main.c's mididev). If it
 // can't be opened, it's the OPL3. The two synths are mixed with the rest
 // of the sound (sys_linux.c's MakeSamples), in step with the timer.
+//
+// On Windows "the system's MIDI" is Windows's own (winmm's MIDI out: the
+// Microsoft GS Wavetable Synth, a VirtualMIDISynth, a USB MIDI cable...):
+// -mididev system (the MIDI mapper), system:N or system:NAME; and
+// FluidSynth is libfluidsynth-3.dll, if it's there.
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -31,9 +36,17 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#define O_CLOEXEC	0
+#define dlopen(name,flags)	((void *)LoadLibraryA (name))
+#define dlsym(lib,name)		((void *)GetProcAddress ((HMODULE)(lib),name))
+#else
 #include <dlfcn.h>
 #include <sys/ioctl.h>
 #include <sound/asequencer.h>
+#endif
 
 extern	int		_argc;
 extern	char	**_argv;
@@ -103,6 +116,17 @@ static char *Arg (const char *name)
 	return NULL;
 }
 
+// needle in hay, whatever the case
+static int Contains (const char *hay, const char *needle)
+{
+	int		n = strlen (needle);
+
+	for ( ; *hay ; hay++)
+		if (!strncasecmp (hay,needle,n))
+			return 1;
+	return !n;
+}
+
 static int Exists (const char *path)
 {
 	return path && *path && access (path,R_OK) == 0;
@@ -119,6 +143,17 @@ static void CloseFluid (void)
 
 static int OpenFluid (void)
 {
+#ifdef _WIN32
+	static const char *libs[] = {"libfluidsynth-3.dll","libfluidsynth-2.dll","fluidsynth.dll",NULL};
+	static const char *fonts[] =
+	{
+		"default.sf2",					// (next to the game's files)
+		"FluidR3_GM.sf2",
+		"GeneralUser GS v1.471.sf2",
+		"C:/soundfonts/default.sf2",
+		NULL
+	};
+#else
 	static const char *libs[] = {"libfluidsynth.so.3","libfluidsynth.so.2","libfluidsynth.so.1","libfluidsynth.so",NULL};
 	static const char *fonts[] =
 	{
@@ -133,6 +168,7 @@ static int OpenFluid (void)
 		"/usr/local/share/soundfonts/default.sf2",
 		NULL
 	};
+#endif
 	const char	**l;
 	char		*font = NULL,*def = NULL;
 	int			i;
@@ -141,7 +177,11 @@ static int OpenFluid (void)
 		fluidlib = dlopen (*l,RTLD_NOW | RTLD_LOCAL);
 	if (!fluidlib)
 	{
+#ifdef _WIN32
+		GameLog ("MIDI: no FluidSynth (libfluidsynth-3.dll, with its DLLs, next to the game)");
+#else
 		GameLog ("MIDI: no FluidSynth (libfluidsynth): install it (Debian / Ubuntu: libfluidsynth3)");
+#endif
 		return 0;
 	}
 #define SYM(var,name)	if (!(*(void **)&var = dlsym (fluidlib,name))) { GameLog ("MIDI: FluidSynth has no %s",name); return 0; }
@@ -205,6 +245,97 @@ static int OpenFluid (void)
 }
 
 
+#ifdef _WIN32
+/*
+=============================================================================
+
+						WINDOWS'S MIDI (winmm)
+
+=============================================================================
+*/
+
+static	HMIDIOUT	midiout;
+
+static int OpenSeq (const char *want)
+{
+	MIDIOUTCAPSA	caps;
+	UINT	id = MIDI_MAPPER,n,i;
+	char	*end;
+	MMRESULT r;
+
+	n = midiOutGetNumDevs ();
+	if (want && *want)
+	{
+		i = strtoul (want,&end,10);
+		if (end != want && !*end)
+			id = i;
+		else
+		{
+			for (i=0;i<n;i++)
+				if (midiOutGetDevCapsA (i,&caps,sizeof(caps)) == MMSYSERR_NOERROR
+				&& Contains (caps.szPname,want))
+					break;
+			if (i == n)
+			{
+				GameLog ("MIDI: no MIDI out device \"%s\"",want);
+				for (i=0;i<n;i++)
+					if (midiOutGetDevCapsA (i,&caps,sizeof(caps)) == MMSYSERR_NOERROR)
+						GameLog ("MIDI:   %u: %s",i,caps.szPname);
+				return 0;
+			}
+			id = i;
+		}
+	}
+	r = midiOutOpen (&midiout,id,0,0,CALLBACK_NULL);
+	if (r != MMSYSERR_NOERROR)
+	{
+		GameLog ("MIDI: can't open Windows's MIDI out %d (error %u; %u devices)",(int)id,r,n);
+		midiout = NULL;
+		return 0;
+	}
+	if (midiOutGetDevCapsA ((UINT_PTR)id,&caps,sizeof(caps)) != MMSYSERR_NOERROR)
+		strcpy (caps.szPname,"?");
+	snprintf (devname,sizeof(devname),"Windows MIDI: %s%s",caps.szPname,id == MIDI_MAPPER ? " (the MIDI mapper)" : "");
+	return 1;
+}
+
+static void SeqClose (void)
+{
+	if (midiout)
+	{
+		midiOutReset (midiout);
+		midiOutClose (midiout);
+	}
+	midiout = NULL;
+}
+
+static void SeqMessage (int status, int d1, int d2)
+{
+	if (midiout)
+		midiOutShortMsg (midiout,status | (d1 << 8) | (d2 << 16));
+}
+
+static void SeqSysEx (const unsigned char *p, int len)
+{
+	static	char	buf[512];
+	MIDIHDR	h;
+	int		i;
+
+	if (!midiout || len > (int)sizeof(buf))
+		return;
+	memcpy (buf,p,len);
+	memset (&h,0,sizeof(h));
+	h.lpData = buf;
+	h.dwBufferLength = h.dwBytesRecorded = len;
+	if (midiOutPrepareHeader (midiout,&h,sizeof(h)) != MMSYSERR_NOERROR)
+		return;
+	if (midiOutLongMsg (midiout,&h,sizeof(h)) == MMSYSERR_NOERROR)
+		for (i=0;i<200 && !(h.dwFlags & MHDR_DONE);i++)
+			Sleep (1);			// (a few bytes: a moment)
+	midiOutUnprepareHeader (midiout,&h,sizeof(h));
+}
+
+#else
 /*
 =============================================================================
 
@@ -289,7 +420,7 @@ static int OpenSeq (const char *want)
 				if (!SeqWanted (&pi,ci.name))
 					continue;
 				if (want && *want)
-					score = (strcasestr (ci.name,want) || strcasestr (pi.name,want)) ? 3 : -1;
+					score = (Contains (ci.name,want) || Contains (pi.name,want)) ? 3 : -1;
 				else if (pi.type & (SNDRV_SEQ_PORT_TYPE_SYNTHESIZER | SNDRV_SEQ_PORT_TYPE_SYNTH | SNDRV_SEQ_PORT_TYPE_SAMPLE))
 					score = 2;
 				else if (pi.type & SNDRV_SEQ_PORT_TYPE_HARDWARE)
@@ -413,6 +544,14 @@ static void SeqSysEx (const unsigned char *p, int len)
 }
 
 
+static void SeqClose (void)
+{
+	close (seqfd);
+	seqfd = -1;
+}
+
+#endif
+
 /*
 =============================================================================
 
@@ -471,7 +610,8 @@ void SYS_MidiOpen (void)
 			kind = DEV_FLUID;
 		else if (want[0] == '/')
 			kind = DEV_RAW;
-		else if (!strncasecmp (want,"alsa",4) || !strncasecmp (want,"seq",3) || !strcasecmp (want,"system"))
+		else if (!strncasecmp (want,"alsa",4) || !strncasecmp (want,"seq",3) || !strncasecmp (want,"system",6)
+		|| !strncasecmp (want,"win",3))
 		{
 			kind = DEV_SEQ;
 			seqwant = strchr (want,':');
@@ -523,8 +663,7 @@ void SYS_MidiShutdown (void)
 		CloseFluid ();
 		break;
 	case DEV_SEQ:
-		close (seqfd);
-		seqfd = -1;
+		SeqClose ();
 		break;
 	case DEV_RAW:
 		close (rawfd);

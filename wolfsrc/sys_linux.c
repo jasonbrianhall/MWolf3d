@@ -16,11 +16,33 @@
 //	video		VESA_Start / VESA_Present / VESA_SetPalette (id_vesa.c's
 //				interface): a window (or full screen) showing the page
 //	network		UDP, for wl_net.c's IPX
+//
+// The same file is the Windows version (MinGW-w64): Winsock for the
+// network, and the few other places where Windows differs are marked.
 
 #define _GNU_SOURCE
 #define SYS_LINUX_IMPL
+#ifdef _WIN32
+#define _WIN32_WINNT	0x0600		// (getaddrinfo, GetAdaptersAddresses)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <windows.h>
+#endif
 #include <SDL.h>
 #include "sys_linux.h"
+#ifdef _WIN32
+#include <mstcpip.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET	_WSAIOW(IOC_VENDOR,12)
+#endif
+#define MSG_NOSIGNAL	0
+#define SOCKERR			WSAGetLastError ()
+#define SOCK_AGAIN(e)	((e) == WSAEWOULDBLOCK || (e) == WSAEINTR)
+#define SOCK_INPROGRESS(e)	((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
+#define SOCK_ACCESS(e)	((e) == WSAEACCES)
+#define CloseSocket(s)	closesocket (s)
+#else
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netinet/in.h>
@@ -30,9 +52,53 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <termios.h>
-#include <fnmatch.h>
 #include <link.h>
 #include <sys/mman.h>
+#define SOCKERR			errno
+#define SOCK_AGAIN(e)	((e) == EAGAIN || (e) == EWOULDBLOCK || (e) == EINTR)
+#define SOCK_INPROGRESS(e)	((e) == EINPROGRESS)
+#define SOCK_ACCESS(e)	((e) == EACCES)
+#define CloseSocket(s)	close (s)
+#endif
+
+// Windows: a UDP socket that sent to a port nobody listens on gets the
+// "port unreachable" back as an error from the next recvfrom: never mind
+static void UdpQuiet (int fd)
+{
+#ifdef _WIN32
+	BOOL	no = FALSE;
+	DWORD	got;
+	WSAIoctl (fd,SIO_UDP_CONNRESET,&no,sizeof(no),NULL,0,&got,NULL,NULL);
+#endif
+}
+
+// a socket that doesn't wait
+static void NonBlocking (int fd)
+{
+#ifdef _WIN32
+	u_long	one = 1;
+	ioctlsocket (fd,FIONBIO,&one);
+#else
+	fcntl (fd,F_SETFL,fcntl (fd,F_GETFL) | O_NONBLOCK);
+#endif
+}
+
+// what went wrong with a socket, in words
+static const char *SockError (int err)
+{
+#ifdef _WIN32
+	static char	msg[200];
+	int			l;
+
+	if (!FormatMessageA (FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,NULL,err,0,msg,sizeof(msg),NULL))
+		sprintf (msg,"error %d",err);
+	for (l = strlen (msg);l && (msg[l-1] == '\n' || msg[l-1] == '\r' || msg[l-1] == '.');)
+		msg[--l] = 0;
+	return msg;
+#else
+	return strerror (err);
+#endif
+}
 
 int		_argc;
 char	**_argv;
@@ -1224,6 +1290,9 @@ int SYS_Open (const char *name, int flags, ...)
 		mode |= 0644;
 	}
 	h = open (name,flags,mode);
+#ifdef _WIN32
+	return h;						// (Windows doesn't care about case)
+#endif
 	if (h == -1 && errno == ENOENT && FindCase (name,real,sizeof(real)))
 		h = open (real,flags,mode);
 	else if (h != -1 && (flags & O_CREAT) && FindCase (name,real,sizeof(real)) && strcmp (real,name))
@@ -1249,6 +1318,25 @@ FILE *SYS_Fopen (const char *name, const char *mode)
 	return f;
 }
 
+// DOS's * and ?, whatever the case
+static int Wildcard (const char *pat, const char *name)
+{
+	for ( ; *pat ; pat++,name++)
+	{
+		if (*pat == '*')
+		{
+			do
+				if (Wildcard (pat+1,name))
+					return 1;
+			while (*name++);
+			return 0;
+		}
+		if (!*name || (*pat != '?' && tolower ((unsigned char)*pat) != tolower ((unsigned char)*name)))
+			return 0;
+	}
+	return !*name;
+}
+
 int findfirst (const char *pattern, struct ffblk *f, int attrib)
 {
 	memset (f,0,sizeof(*f));
@@ -1268,7 +1356,7 @@ int findnext (struct ffblk *f)
 		return -1;
 	while ((e = readdir (f->ff_dir)) != NULL)
 	{
-		if (fnmatch (f->ff_pattern,e->d_name,FNM_CASEFOLD))
+		if (!Wildcard (f->ff_pattern,e->d_name))
 			continue;
 		if (stat (e->d_name,&st) || !S_ISREG (st.st_mode))
 			continue;
@@ -1335,6 +1423,9 @@ int kbhit (void)
 	SYS_Poll ();
 	if (window && Keyboard[0x01])
 		return 1;
+#ifdef _WIN32
+	return 0;						// (a window, no terminal to type in)
+#endif
 	if (!isatty (0))
 		return 0;					// (no terminal to type in)
 	FD_ZERO (&fds);
@@ -1494,6 +1585,43 @@ static void Fault (int sig)
 // a 0 at each newline and puts it back), which DOS never minded: make
 // the program's read-only data writable, as it was there
 //
+#ifdef _WIN32
+static void WritableConstants (void)
+{
+	unsigned char		*base = (unsigned char *)GetModuleHandle (NULL);
+	IMAGE_NT_HEADERS	*nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+	IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION (nt);
+	DWORD				old;
+	int					i;
+
+	for (i=0;i<nt->FileHeader.NumberOfSections;i++,sec++)
+		if (!(sec->Characteristics & (IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE))
+		&& (sec->Characteristics & IMAGE_SCN_MEM_READ) && sec->Misc.VirtualSize)
+			VirtualProtect (base + sec->VirtualAddress,sec->Misc.VirtualSize,PAGE_READWRITE,&old);
+}
+
+// Quit with an error: a window says it (there's no terminal to print it on)
+void SYS_ErrorBox (const char *error)
+{
+	char	text[1400],dir[MAX_PATH];
+
+	if (!getcwd (dir,sizeof(dir)))
+		strcpy (dir,"?");
+	if (strstr (error,"DATA FILES") || strstr (error,"data files"))
+		snprintf (text,sizeof(text),"%s\n\nCopy the data files of your copy of the game "
+			"(AUDIOHED, AUDIOT, GAMEMAPS, MAPHEAD, VGADICT, VGAGRAPH, VGAHEAD, VSWAP) "
+			"into this folder:\n\n%s\n\n(Steam: Wolfenstein 3D\\base; GOG: the game's folder.) "
+			"Or run the game with -data FOLDER.",error,dir);
+	else
+		snprintf (text,sizeof(text),"%s",error);
+	MessageBoxA (NULL,text,"Wolfenstein 3-D",MB_OK | MB_ICONERROR);
+}
+#else
+void SYS_ErrorBox (const char *error)
+{
+	// (the terminal has it)
+}
+
 static int WritableConstants (struct dl_phdr_info *info, size_t size, void *data)
 {
 	int			i;
@@ -1513,6 +1641,7 @@ static int WritableConstants (struct dl_phdr_info *info, size_t size, void *data
 	}
 	return 1;
 }
+#endif
 
 int main (int argc, char **argv)
 {
@@ -1520,8 +1649,17 @@ int main (int argc, char **argv)
 
 	_argc = argc;
 	_argv = argv;
+#ifdef _WIN32
+	{
+		WSADATA	wsa;
+		WSAStartup (MAKEWORD (2,2),&wsa);
+	}
+	setvbuf (stdout,NULL,_IONBF,0);
+	WritableConstants ();
+#else
 	setvbuf (stdout,NULL,_IOLBF,0);
 	dl_iterate_phdr (WritableConstants,NULL);
+#endif
 
 	// -data dir: the game's files (and its CONFIG and saved games) are there
 	for (i=1;i<argc-1;i++)
@@ -1547,7 +1685,9 @@ int main (int argc, char **argv)
 	signal (SIGABRT,Fault);
 	signal (SIGINT,Interrupt);
 	signal (SIGTERM,Interrupt);
+#ifdef SIGHUP
 	signal (SIGHUP,Interrupt);
+#endif
 
 	// a mouse driver's vector (the game looks before calling INT 33h)
 	_farpokew (0,0x33*4,0x0010);
@@ -1589,6 +1729,7 @@ int SYS_NetStartup (int port)
 	netsock = socket (AF_INET,SOCK_DGRAM,0);
 	if (netsock < 0)
 		return 0;
+	UdpQuiet (netsock);
 	setsockopt (netsock,SOL_SOCKET,SO_BROADCAST,&one,sizeof(one));
 	memset (&sa,0,sizeof(sa));
 	sa.sin_family = AF_INET;
@@ -1596,12 +1737,12 @@ int SYS_NetStartup (int port)
 	sa.sin_port = htons (port);
 	if (bind (netsock,(struct sockaddr *)&sa,sizeof(sa)))
 	{
-		fprintf (stderr,"UDP port %d: %s\n",port,strerror (errno));
-		close (netsock);
+		fprintf (stderr,"UDP port %d: %s\n",port,SockError (SOCKERR));
+		CloseSocket (netsock);
 		netsock = -1;
 		return 0;
 	}
-	fcntl (netsock,F_SETFL,fcntl (netsock,F_GETFL) | O_NONBLOCK);
+	NonBlocking (netsock);
 	netport = port;
 	return 1;
 }
@@ -1609,7 +1750,7 @@ int SYS_NetStartup (int port)
 void SYS_NetShutdown (void)
 {
 	if (netsock >= 0)
-		close (netsock);
+		CloseSocket (netsock);
 	netsock = -1;
 }
 
@@ -1686,6 +1827,54 @@ void SYS_NetBroadcastAddr (unsigned char *addr, int port)
 // port), for machines where 255.255.255.255 only goes out of one of them;
 // names: a line about them, for the log
 //
+#ifdef _WIN32
+int SYS_NetInterfaces (unsigned char (*addrs)[10], int max, int port, char *names, int nameslen)
+{
+	IP_ADAPTER_ADDRESSES	*list,*a;
+	IP_ADAPTER_UNICAST_ADDRESS *u;
+	ULONG		size = 16384;
+	struct sockaddr_in sa;
+	uint32_t	ip,mask;
+	int			n = 0;
+	char		one[200];
+
+	names[0] = 0;
+	list = malloc (size);
+	if (!list)
+		return 0;
+	if (GetAdaptersAddresses (AF_INET,GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
+		| GAA_FLAG_SKIP_DNS_SERVER,NULL,list,&size) != NO_ERROR)
+	{
+		free (list);
+		return 0;
+	}
+	for (a=list;a;a=a->Next)
+	{
+		if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+			continue;
+		for (u=a->FirstUnicastAddress;u;u=u->Next)
+		{
+			if (u->Address.lpSockaddr->sa_family != AF_INET)
+				continue;
+			memcpy (&sa,u->Address.lpSockaddr,sizeof(sa));
+			ip = ntohl (sa.sin_addr.s_addr);
+			mask = u->OnLinkPrefixLength ? 0xffffffffu << (32 - u->OnLinkPrefixLength) : 0;
+			snprintf (one,sizeof(one),"%s%s %s",names[0] ? ", " : "",a->AdapterName,inet_ntoa (sa.sin_addr));
+			sa.sin_addr.s_addr = htonl (ip | ~mask);
+			snprintf (one+strlen (one),sizeof(one)-strlen (one)," (broadcast %s)",inet_ntoa (sa.sin_addr));
+			if (n < max)
+			{
+				sa.sin_port = htons (port ? port : netport);
+				FromSockaddr (&sa,addrs[n++]);
+			}
+			if (strlen (names)+strlen (one) < (size_t)nameslen)
+				strcat (names,one);
+		}
+	}
+	free (list);
+	return n;
+}
+#else
 int SYS_NetInterfaces (unsigned char (*addrs)[10], int max, int port, char *names, int nameslen)
 {
 	struct ifaddrs *list,*i;
@@ -1718,6 +1907,7 @@ int SYS_NetInterfaces (unsigned char (*addrs)[10], int max, int port, char *name
 	freeifaddrs (list);
 	return n;
 }
+#endif
 
 //
 // SYS_NetResolve: "host", "host:port" (the port defaults to defport)
@@ -1893,6 +2083,8 @@ int SYS_IpxStartup (const char *server, int serve)
 	struct addrinfo hints,*res;
 
 	ipxsock = socket (AF_INET,SOCK_DGRAM,0);
+	if (ipxsock >= 0)
+		UdpQuiet (ipxsock);
 	if (ipxsock < 0)
 		return 0;
 	memset (&sa,0,sizeof(sa));
@@ -1901,7 +2093,7 @@ int SYS_IpxStartup (const char *server, int serve)
 	sa.sin_port = htons (serve ? serve : 0);
 	if (bind (ipxsock,(struct sockaddr *)&sa,sizeof(sa)))
 	{
-		if (serve == IPXNETPORT && errno == EACCES)
+		if (serve == IPXNETPORT && SOCK_ACCESS (SOCKERR))
 		{
 			// 213 is for root: the next best thing
 			serve = 21300;
@@ -1909,7 +2101,7 @@ int SYS_IpxStartup (const char *server, int serve)
 			if (!bind (ipxsock,(struct sockaddr *)&sa,sizeof(sa)))
 				goto bound;
 		}
-		fprintf (stderr,"IPX: UDP port %d: %s\n",serve,strerror (errno));
+		fprintf (stderr,"IPX: UDP port %d: %s\n",serve,SockError (SOCKERR));
 		return 0;
 	}
 bound:
@@ -1926,7 +2118,7 @@ bound:
 			printf ("IPX server on UDP port %d (in DOSBox: IPXNET CONNECT <this machine>)\n",serve);
 		else
 			printf ("IPX server on UDP port %d (in DOSBox: IPXNET CONNECT <this machine> %d)\n",serve,serve);
-		fcntl (ipxsock,F_SETFL,fcntl (ipxsock,F_GETFL) | O_NONBLOCK);
+		NonBlocking (ipxsock);
 		return 1;
 	}
 
@@ -1970,7 +2162,7 @@ bound:
 		if (n >= IPXHDR && buf[16] == 0 && buf[17] == 2)
 		{
 			memcpy (ipxmyaddr,buf+6,10);	// what the server calls us
-			fcntl (ipxsock,F_SETFL,fcntl (ipxsock,F_GETFL) | O_NONBLOCK);
+			NonBlocking (ipxsock);
 			return 1;
 		}
 	}
@@ -2094,7 +2286,7 @@ static void TcpSetup (int fd)
 {
 	int one = 1;
 
-	fcntl (fd,F_SETFL,fcntl (fd,F_GETFL) | O_NONBLOCK);
+	NonBlocking (fd);
 	setsockopt (fd,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one));	// no batching up
 }
 
@@ -2116,7 +2308,7 @@ static int TcpFlush (tcpconn_t *c)
 			c->outlen -= n;
 			continue;
 		}
-		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+		if (n < 0 && SOCK_AGAIN (SOCKERR))
 			return 1;
 		return 0;
 	}
@@ -2165,7 +2357,7 @@ static int TcpFrame (tcpconn_t *c, unsigned char *pkt)
 			c->inlen += n;
 			continue;
 		}
-		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+		if (n < 0 && SOCK_AGAIN (SOCKERR))
 			return 0;
 		return -1;
 	}
@@ -2187,7 +2379,7 @@ static void TcpAccept (void)
 			return;
 		if (numtcpconns == MAXIPXNODES || sa.sin_family != AF_INET)
 		{
-			close (fd);
+			CloseSocket (fd);
 			continue;
 		}
 		TcpSetup (fd);
@@ -2212,7 +2404,7 @@ static void TcpDrop (int i)
 
 	fprintf (stderr,"TCP server: %s:%d disconnected\n",inet_ntoa (c->sa.sin_addr),ntohs (c->sa.sin_port));
 	if (c->fd >= 0)
-		close (c->fd);
+		CloseSocket (c->fd);
 	numtcpconns--;
 	if (i != numtcpconns)
 		memcpy (c,&tcpconns[numtcpconns],sizeof(*c));
@@ -2264,12 +2456,12 @@ int SYS_TcpStartup (const char *server, int serve)
 		sa.sin_port = htons (serve);
 		if (bind (tcplisten,(struct sockaddr *)&sa,sizeof(sa)) || listen (tcplisten,8))
 		{
-			fprintf (stderr,"TCP port %d: %s\n",serve,strerror (errno));
-			close (tcplisten);
+			fprintf (stderr,"TCP port %d: %s\n",serve,SockError (SOCKERR));
+			CloseSocket (tcplisten);
 			tcplisten = -1;
 			return 0;
 		}
-		fcntl (tcplisten,F_SETFL,fcntl (tcplisten,F_GETFL) | O_NONBLOCK);
+		NonBlocking (tcplisten);
 
 		// our own node: a made up address no real one has (127.0.0.2)
 		tcpserving = 1;
@@ -2308,10 +2500,10 @@ int SYS_TcpStartup (const char *server, int serve)
 	if (fd < 0)
 		return 0;
 	TcpSetup (fd);
-	if (connect (fd,(struct sockaddr *)&sa,sizeof(sa)) && errno != EINPROGRESS)
+	if (connect (fd,(struct sockaddr *)&sa,sizeof(sa)) && !SOCK_INPROGRESS (SOCKERR))
 	{
-		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,strerror (errno));
-		close (fd);
+		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,SockError (SOCKERR));
+		CloseSocket (fd);
 		return 0;
 	}
 	FD_ZERO (&fds);
@@ -2324,8 +2516,8 @@ int SYS_TcpStartup (const char *server, int serve)
 		getsockopt (fd,SOL_SOCKET,SO_ERROR,&err,&errlen);
 	if (err)
 	{
-		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,strerror (err));
-		close (fd);
+		fprintf (stderr,"TCP: %s:%d: %s\n",host,port,SockError (err));
+		CloseSocket (fd);
 		return 0;
 	}
 
@@ -2353,7 +2545,7 @@ int SYS_TcpStartup (const char *server, int serve)
 		}
 	}
 	fprintf (stderr,"TCP: no answer from the game's server at %s:%d (is it -tcpserver?)\n",host,port);
-	close (fd);
+	CloseSocket (fd);
 	tcpserverconn.fd = -1;
 	return 0;
 }
@@ -2377,13 +2569,13 @@ void SYS_TcpShutdown (void)
 	} while (waiting && SDL_GetTicks () - start < 500);
 
 	if (tcpserverconn.fd >= 0)
-		close (tcpserverconn.fd);
+		CloseSocket (tcpserverconn.fd);
 	tcpserverconn.fd = -1;
 	for (i=0;i<numtcpconns;i++)
-		close (tcpconns[i].fd);
+		CloseSocket (tcpconns[i].fd);
 	numtcpconns = 0;
 	if (tcplisten >= 0)
-		close (tcplisten);
+		CloseSocket (tcplisten);
 	tcplisten = -1;
 }
 
@@ -2447,7 +2639,7 @@ int SYS_TcpGet (void *buf, int max, unsigned char *from)
 				if (!toldgone)
 					fprintf (stderr,"TCP: the server closed the connection\n");
 				toldgone = 1;
-				close (tcpserverconn.fd);
+				CloseSocket (tcpserverconn.fd);
 				tcpserverconn.fd = -1;
 			}
 			if (n <= 0)

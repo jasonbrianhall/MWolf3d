@@ -200,7 +200,7 @@ static void ShowHelp (void)
 	if (i == _argc)
 		return;
 
-#ifdef __linux__
+#ifdef SYS_SDL
 	printf (
 "Usage: %s [options]\n"
 "\n"
@@ -1722,6 +1722,10 @@ void Quit (char *error)
 
 	ShutdownId ();
 
+#ifdef SYS_SDL
+	if (error && *error)
+		SYS_ErrorBox (error);		// (Windows: there's no terminal)
+#endif
 	if (error && *error)
 	{
 	  if (!screen)
@@ -1946,7 +1950,7 @@ void    DemoLoop (void)
 
 char    *nosprtxt[] = {"nospr",nil};
 
-#ifdef __linux__
+#ifdef SYS_SDL
 int wolf_main (void)		// sys_linux.c's main() calls it
 #else
 int main (void)
