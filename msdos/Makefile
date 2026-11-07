@@ -183,7 +183,8 @@ run: msdos_embedded
 		[ -f "$$f" ] && cp "$$f" "build/dosc/$$(basename "$$f" | tr a-z A-Z)"; done; true
 	cp PLAYERS.WL6 build/dosc/PLAYERS.$(shell echo $(DATAEXT) | tr a-z A-Z)
 	cp RESPAWN.WAD build/dosc/
-	printf '[cpu]\ncore=dynamic\ncputype=auto\ncycles=max\n[dosbox]\nmachine=svga_s3\nmemsize=16\n[sblaster]\nsbtype=sb16\nsbbase=220\nirq=7\ndma=1\nhdma=5\noplmode=auto\n[autoexec]\nset BLASTER=A220 I7 D1 H5 T6\n' > build/dosbox.conf
+	rm -rf build/dosc/MUSIC && cp -r MUSIC build/dosc/MUSIC
+	printf '[cpu]\ncore=dynamic\ncputype=auto\ncycles=max\n[dosbox]\nmachine=svga_s3\nmemsize=16\n[sblaster]\nsbtype=sb16\nsbbase=220\nirq=7\ndma=1\nhdma=5\noplmode=auto\n[midi]\nmpu401=intelligent\nmididevice=default\n[autoexec]\nset BLASTER=A220 I7 D1 H5 T6\n' > build/dosbox.conf
 	dosbox -conf build/dosbox.conf -c "mount c build/dosc" -c "c:" -c "$(DOS_TARGET) $(ARGS)"
 
 clean:

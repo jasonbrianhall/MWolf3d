@@ -181,10 +181,12 @@ AdLib plays it: Music: General MIDI in the Sound menu (or SETUP, or
 ``P``, or ``-mpu 300``; ``nompu`` to leave it alone). It's driven in UART
 mode, like a Sound Canvas, an SB16's MPU-401, a Roland MT-32 (after
 MTGM.MID) or DOSBox's ``mpu401=intelligent``. The songs are standard MIDI
-files: unzip `wolfmidi <https://github.com/ericvids/wolfmidi/releases>`_'s
-``MUSIC`` directory (the game's own songs converted to General MIDI, made for
-`wolfdosmpu <https://github.com/ericvids/wolfdosmpu>`_) next to the game, or
-put your own in it: ``MUSIC\CORNER``, ``MUSIC\CORNER.MID`` or
+files in a ``MUSIC`` directory next to the game: ``msdos/MUSIC`` has
+`wolfmidi <https://github.com/ericvids/wolfmidi>`_'s (the game's own songs
+converted to General MIDI, made for
+`wolfdosmpu <https://github.com/ericvids/wolfdosmpu>`_; ``msdos/WOLFMIDI.TXT``),
+and the release zips have it next to each game. Copy it there, or put your
+own songs in it: ``MUSIC\CORNER``, ``MUSIC\CORNER.MID`` or
 ``CORNER.MID`` for the song the AdLib knows as CORNER (any type 0 or 1 file,
 any tempo; ``loopStart`` / ``loopEnd`` markers loop part of it). A song
 without a file is played on the AdLib, and ``WOLFLOG.TXT`` says which.
