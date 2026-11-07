@@ -1655,6 +1655,11 @@ int main (int argc, char **argv)
 		WSAStartup (MAKEWORD (2,2),&wsa);
 	}
 	setvbuf (stdout,NULL,_IONBF,0);
+	// files are binary unless they say otherwise, as Borland's (and DOS
+	// DJGPP's: dos32.c) were: the saved games are written with creat(),
+	// which Windows would otherwise open in text mode (every 0Ah byte
+	// written as 0Dh 0Ah)
+	_fmode = _O_BINARY;
 	WritableConstants ();
 #else
 	setvbuf (stdout,NULL,_IOLBF,0);
