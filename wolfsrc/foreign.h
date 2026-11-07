@@ -40,6 +40,7 @@
 #define STR_NONE	"None"
 #define	STR_PC		"PC Speaker"
 #define	STR_ALSB	"AdLib/Sound Blaster"
+#define	STR_GM		"General MIDI"
 #define	STR_DISNEY	"Disney Sound Source"
 #define	STR_SB		"Sound Blaster"
 

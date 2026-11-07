@@ -115,6 +115,7 @@ far SndMenu[]=
 	{0,"",0},
 	{1,"",0},
 	{1,"",0},
+	{0,"",0},
 #else
 	{1,STR_NONE,0},
 	{1,STR_PC,0},
@@ -127,7 +128,8 @@ far SndMenu[]=
 	{0,"",0},
 	{0,"",0},
 	{1,STR_NONE,0},
-	{1,STR_ALSB,0}
+	{1,STR_ALSB,0},
+	{1,STR_GM,0}		// (when there's an MPU-401: see DrawSoundMenu)
 #endif
 },
 
@@ -1229,6 +1231,15 @@ void CP_Sound(void)
 					StartCPMusic(MENUSONG);
 				}
 				break;
+			case 12:
+				if (MusicMode!=smm_MIDI)
+				{
+					SD_SetMusicMode(smm_MIDI);
+					DrawSoundMenu();
+					ShootSnd();
+					StartCPMusic(MENUSONG);
+				}
+				break;
 		}
 	} while(which>=0);
 
@@ -1251,17 +1262,22 @@ void DrawSoundMenu(void)
 
 
 #ifdef JAPAN
+	SndItems.amount = 12;
 	CA_CacheScreen(S_SOUNDPIC);
 #else
 	//
 	// DRAW SOUND MENU
 	//
+	// General MIDI, with an MPU-401: a third music line, where the
+	// "mouse button / Esc" picture was (there's no room for both)
+	SndItems.amount = MIDIPresent ? 13 : 12;
 	ClearMScreen();
-	VWB_DrawPic(112,184,C_MOUSELBACKPIC);
+	if (!MIDIPresent)
+		VWB_DrawPic(112,184,C_MOUSELBACKPIC);
 
 	DrawWindow(SM_X-8,SM_Y1-3,SM_W,SM_H1,BKGDCOLOR);
 	DrawWindow(SM_X-8,SM_Y2-3,SM_W,SM_H2,BKGDCOLOR);
-	DrawWindow(SM_X-8,SM_Y3-3,SM_W,SM_H3,BKGDCOLOR);
+	DrawWindow(SM_X-8,SM_Y3-3,SM_W,MIDIPresent ? SM_H3+13 : SM_H3,BKGDCOLOR);
 #endif
 
 	//
@@ -1269,7 +1285,9 @@ void DrawSoundMenu(void)
 	//
 	if (!AdLibPresent && !SoundBlasterPresent)
 	{
-		SndMenu[2].active=SndMenu[10].active=SndMenu[11].active=0;
+		SndMenu[2].active=SndMenu[11].active=0;
+		if (!MIDIPresent)
+			SndMenu[10].active=0;
 	}
 
 	if (!SoundSourcePresent)
@@ -1320,6 +1338,7 @@ void DrawSoundMenu(void)
 				//
 				case 10: if (MusicMode==smm_Off) on=1; break;
 				case 11: if (MusicMode==smm_AdLib) on=1; break;
+				case 12: if (MusicMode==smm_MIDI) on=1; break;
 			}
 
 			if (on)

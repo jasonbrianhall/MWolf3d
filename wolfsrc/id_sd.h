@@ -21,7 +21,8 @@ typedef	enum	{
 					sdm_PC,sdm_AdLib,
 				}	SDMode;
 typedef	enum	{
-					smm_Off,smm_AdLib
+					smm_Off,smm_AdLib,
+					smm_MIDI		// ours: General MIDI (id_midi.c); CONFIG says AdLib
 				}	SMMode;
 typedef	enum	{
 					sds_Off,sds_PC,sds_SoundSource,sds_SoundBlaster

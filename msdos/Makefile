@@ -25,7 +25,8 @@
 # juggle. The assembly (raycaster, compiled scalers, sound ISRs, Huffman
 # expander...) is C now; the hardware is driven as before: unchained VGA
 # ("mode X"), the keyboard on IRQ 1, the PIT on IRQ 0 for timing, PC
-# speaker, AdLib and Sound Blaster (BLASTER=A220 I5 D1).
+# speaker, AdLib and Sound Blaster (BLASTER=A220 I5 D1), and General MIDI
+# on an MPU-401 (330h, or BLASTER's P).
 #
 # Runs on a 386 or later with a 387 (or a 486DX; without one, put
 # EMU387.DXE from DJGPP's v2misc next to it), 4 MB of RAM or more. Put the
@@ -100,7 +101,7 @@ CXXFLAGS = -O2 $(ARCH) -fno-exceptions -fno-rtti -w -I$(SRC)
 WOLF_SRC := id_ca id_in id_mm id_pm id_sd id_us_1 id_us_a id_vh id_vl \
             wl_act1 wl_act2 wl_agent wl_debug wl_draw wl_game wl_inter wl_main \
             wl_menu wl_net wl_play wl_scale wl_state \
-            wl_map dos32 gamepal signon id_gus id_vesa
+            wl_map dos32 gamepal signon id_gus id_vesa id_midi
 # Spear has no help or end texts (wl_text.c wasn't in its project either)
 ifeq ($(filter sod sdm,$(VERSION)),)
 WOLF_SRC += wl_text
