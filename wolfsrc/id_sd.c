@@ -253,6 +253,7 @@ SDL_SetTimerSpeed(void)
 	else if
 	(
 		(MusicMode == smm_AdLib)
+	||	(MusicMode == smm_MIDI)		// the MIDI song is timed like the AdLib's
 	||	((DigiMode == sds_SoundSource) && DigiPlaying)
 	||	GUSPresent					// the stream needs filling often
 	)
@@ -1626,7 +1627,7 @@ SDL_ShutDevice(void)
 static void
 SDL_CleanDevice(void)
 {
-	if ((SoundMode == sdm_AdLib) || (MusicMode == smm_AdLib))
+	if ((SoundMode == sdm_AdLib) || (MusicMode == smm_AdLib) || (MusicMode == smm_MIDI && AdLibPresent))
 		SDL_CleanAL();
 }
 
@@ -1732,8 +1733,17 @@ SD_SetMusicMode(SMMode mode)
 			result = true;
 		}
 		break;
+	case smm_MIDI:
+		if (MIDIPresent)
+		{
+			NeedsMusic = true;		// the AdLib song: its name, and in case there's no MIDI file
+			result = true;
+		}
+		break;
 	}
 
+	if (result && MusicMode == smm_MIDI && mode != smm_MIDI)
+		MIDI_Stop();
 	if (result)
 		MusicMode = mode;
 
@@ -1890,6 +1900,8 @@ SD_Startup(void)
 
 	SDL_SetupDigi();
 
+	MIDI_Startup();
+
 	SD_Started = true;
 }
 
@@ -1930,8 +1942,11 @@ SD_Default(boolean gotit,SDMode sd,SMMode sm)
 	{
 		switch (sm)
 		{
-		case sdm_AdLib:
+		case smm_AdLib:
 			gotsm = AdLibPresent;
+			break;
+		case smm_MIDI:
+			gotsm = MIDIPresent;
 			break;
 		}
 	}
@@ -1957,6 +1972,7 @@ SD_Shutdown(void)
 		return;
 
 	SD_MusicOff();
+	MIDI_Shutdown();
 	SD_StopSound();
 	SDL_ShutDevice();
 	SDL_CleanDevice();
@@ -2267,10 +2283,15 @@ SD_WaitSoundDone(void)
 //	SD_MusicOn() - turns on the sequencer
 //
 ///////////////////////////////////////////////////////////////////////////
+static	boolean		midisong;		// the song is the MIDI file's, not the AdLib's
+
 void
 SD_MusicOn(void)
 {
-	sqActive = true;
+	if (midisong)
+		MIDI_Resume();
+	else
+		sqActive = true;
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -2286,6 +2307,11 @@ SD_MusicOff(void)
 
 	switch (MusicMode)
 	{
+	case smm_MIDI:
+		MIDI_Pause();
+		if (!AdLibPresent)
+			break;
+		// and the AdLib, which plays what has no MIDI file
 	case smm_AdLib:
 		alFXReg = 0;
 		alOut(alEffects,0);
@@ -2305,10 +2331,24 @@ void
 SD_StartMusic(MusicGroup *music)
 {
 	SD_MusicOff();
+	midisong = false;
+
+	// General MIDI: the song's MIDI file, if there is one (read with the
+	// interrupts on); else the AdLib plays it, as in AdLib mode
+	if (MusicMode == smm_MIDI && MIDI_LoadSong(music))
+	{
+		DISABLE();
+		sqHackLen = sqHackSeqLen = 0;
+		midisong = true;
+		MIDI_Play();
+		RESTORE();
+		return;
+	}
+
 	{
 	DISABLE();
 
-	if (MusicMode == smm_AdLib)
+	if (MusicMode == smm_AdLib || (MusicMode == smm_MIDI && AdLibPresent))
 	{
 		sqHackPtr = sqHack = music->values;
 		sqHackSeqLen = sqHackLen = music->length;
@@ -2579,6 +2619,8 @@ SDL_t0Service(void)
 		}
 		if (sqActive)
 			SDL_DoMusic();
+		if (MIDIPresent)
+			MIDI_Service(TickBase * 10);
 		if (ssSample)
 			SDL_SSService();
 		if (GUSPresent)
@@ -2589,6 +2631,8 @@ SDL_t0Service(void)
 		SDL_DoTime();
 		if (pcSound || alSound)
 			SDL_DoFX();
+		if (MIDIPresent)
+			MIDI_Flush();				// notes off still on their way
 		break;
 	}
 
@@ -2657,6 +2701,7 @@ SD_EmergencyShutdown(void)
 		sbOut(sbWriteCmd,0xd0);
 	}
 	GUS_Shutdown();
+	MIDI_EmergencyStop();
 	enable();
 	if (AdLibPresent)
 		SDL_CleanAL();

@@ -96,6 +96,7 @@ typedef	struct
 #include "id_vh.h"
 #include "id_in.h"
 #include "id_sd.h"
+#include "id_midi.h"
 #include "id_us.h"
 
 

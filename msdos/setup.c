@@ -74,6 +74,8 @@ typedef struct
 	int16_t			buttonjoy[4];
 	int16_t			viewsize,mouseadjustment;
 	int16_t			keystrafe;		// (ours, after id's: the left/right keys strafe)
+	int16_t			midimusic;		// (ours: sm says AdLib, this General MIDI)
+	int16_t			mididev;		// (ours, Linux: what plays the MIDI)
 } config_t;
 #define OLDCFGSIZE	(offsetof (config_t,keystrafe))	// id's CONFIG, and ours before keystrafe
 #pragma pack(pop)
@@ -240,6 +242,8 @@ static void LoadConfig (void)
 	if (cfg.mouseadjustment < 0 || cfg.mouseadjustment > 20) cfg.mouseadjustment = 5;
 	if (cfg.joystickport < 0 || cfg.joystickport > 1) cfg.joystickport = 0;
 	if (cfg.keystrafe != 1) cfg.keystrafe = 0;
+	if (cfg.midimusic != 1 || cfg.sm != 1) cfg.midimusic = 0;
+	if (cfg.mididev < 0 || cfg.mididev > 2) cfg.mididev = 0;
 }
 
 /* chat macros for co-op (Alt+1..Alt+0 while typing a message), CHATMACS.CFG */
@@ -1206,7 +1210,10 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 /* the screens                                                         */
 
 static const char *sfxnames[] = {"Off","PC Speaker","AdLib / SB / UltraSound"};
-static const char *musicnames[] = {"Off","AdLib / SB / UltraSound"};
+static const char *musicnames[] = {"Off","AdLib / SB / UltraSound","General MIDI"};
+#ifdef __linux__
+static const char *midinames[] = {"OPL3 synth (built in)","FluidSynth","System MIDI (ALSA)"};
+#endif
 #ifdef __linux__
 static const char *diginames[] = {"Off","Off (PC Speaker)","Off (Sound Source)","On"};
 #else
@@ -1223,11 +1230,17 @@ static void SoundScreen (void)
 {
 	static int cursor;
 	char	note[64];
+	// General MIDI is AdLib in id's field (so the original game plays
+	// that) and midimusic in ours
+	int16_t	music = cfg.sm == 1 && cfg.midimusic ? 2 : cfg.sm;
 	field_t	f[] =
 	{
 		{F_CHOICE,"Sound effects",&cfg.sd,0,2,sfxnames},
-		{F_CHOICE,"Music",&cfg.sm,0,1,musicnames},
+		{F_CHOICE,"Music",&music,0,2,musicnames},
 		{F_CHOICE,"Digitized sound",&cfg.sds,0,3,diginames},
+#ifdef __linux__
+		{F_CHOICE,"General MIDI on",&cfg.mididev,0,2,midinames},
+#endif
 	};
 
 #ifdef __linux__
@@ -1238,8 +1251,10 @@ static void SoundScreen (void)
 	else
 		sprintf (note,"BLASTER=%.40s",getenv ("BLASTER") ? getenv ("BLASTER") : "(not set)");
 #endif
-	while (Form ("Sound",f,3,&cursor,note) != -1)
+	while (Form ("Sound",f,sizeof(f)/sizeof(f[0]),&cursor,note) != -1)
 		;
+	cfg.sm = music == 2 ? 1 : music;
+	cfg.midimusic = music == 2;
 }
 
 static void KeyboardScreen (void)

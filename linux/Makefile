@@ -13,7 +13,9 @@
 #
 # The same source as the DOS version: sys_linux.c stands in for the PC
 # (timer and keyboard interrupts, mouse, PC speaker, an AdLib in software
-# for the music, the digitized sounds, the screen, UDP for IPX).
+# for the music, the digitized sounds, the screen, UDP for IPX), and
+# sys_midi.c the MPU-401 (General MIDI: an OPL3 in software, FluidSynth if
+# it's installed, opened at run time, or the ALSA sequencer).
 VERSION ?= wl6
 
 SRC     := ../wolfsrc
@@ -63,11 +65,11 @@ ALLLDFLAGS = $(LDFLAGS) -no-pie
 WOLF_SRC := id_ca id_in id_mm id_pm id_sd id_us_1 id_us_a id_vh id_vl \
             wl_act1 wl_act2 wl_agent wl_debug wl_draw wl_game wl_inter wl_main \
             wl_menu wl_net wl_play wl_scale wl_state \
-            wl_map gamepal signon sys_linux
+            wl_map gamepal signon sys_linux id_midi sys_midi
 ifeq ($(filter sod sdm,$(VERSION)),)
 WOLF_SRC += wl_text
 endif
-OBJS := $(addprefix $(BUILD)/,$(addsuffix .o,$(WOLF_SRC))) $(BUILD)/dbopl.o $(BUILD)/oplemu.o
+OBJS := $(addprefix $(BUILD)/,$(addsuffix .o,$(WOLF_SRC))) $(BUILD)/dbopl.o $(BUILD)/oplemu.o $(BUILD)/midiopl.o
 HDRS := $(wildcard $(SRC)/*.h)
 
 all: $(EXENAME) setup
@@ -78,14 +80,14 @@ setup: ../msdos/setup.c Makefile
 	cp $@ ipxsetup
 
 $(EXENAME): $(OBJS)
-	$(CXX) $(ALLLDFLAGS) $(OBJS) $(SDL_LIBS) -lm -o $@
+	$(CXX) $(ALLLDFLAGS) $(OBJS) $(SDL_LIBS) -lm -ldl -o $@
 	@echo "Built $@ ($(VERSION))"
 
 $(BUILD)/%.o: $(SRC)/%.c $(HDRS) Makefile
 	@mkdir -p $(BUILD)
 	$(CC) $(ALLCFLAGS) -c $< -o $@
 
-$(BUILD)/%.o: $(SRC)/%.cpp $(SRC)/dbopl.h Makefile
+$(BUILD)/%.o: $(SRC)/%.cpp $(SRC)/dbopl.h $(SRC)/midibank.h Makefile
 	@mkdir -p $(BUILD)
 	$(CXX) $(ALLCXXFLAGS) -c $< -o $@
 

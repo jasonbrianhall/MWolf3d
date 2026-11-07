@@ -270,6 +270,9 @@ unsigned char inportb (int port)
 		return (vgastatus & 0x40) ? 8 : 0;
 	case 0x201:
 		return 0xf0;					// no joystick buttons
+	case 0x330:
+	case 0x331:
+		return SYS_MpuIn (port);		// the MPU-401 (sys_midi.c)
 	}
 	return 0;
 }
@@ -318,6 +321,10 @@ void outportb (int port, unsigned char v)
 	case 0x61:
 		port61 = v;
 		break;
+	case 0x330:
+	case 0x331:
+		SYS_MpuOut (port,v);
+		break;
 	}
 }
 
@@ -363,6 +370,7 @@ static	uint32_t samplefrac;		// PIT counts not yet made into samples
 
 static	int		oplon;				// GUS_Startup: the OPL2 and the digitized sounds
 static	int32_t	oplbuf[OPLCHUNK];
+static	int32_t	midibuf[OPLCHUNK*2];	// the General MIDI synth's, stereo
 static	unsigned char * volatile digiptr;
 static	volatile uint32_t digilen;
 static	uint32_t digipos,digistep;	// 16.16
@@ -432,7 +440,7 @@ static void StartAudio (void)
 //
 static void MakeSamples (int n)
 {
-	int		i,count;
+	int		i,count,midi;
 	int32_t	l,r,s,d,sp;
 	uint32_t f;
 
@@ -459,10 +467,16 @@ static void MakeSamples (int n)
 		count = n > OPLCHUNK ? OPLCHUNK : n;
 		if (oplon)
 			OPLEMU_Generate (oplbuf,count);
+		midi = SYS_MidiRender (midibuf,count);
 		for (i=0;i<count;i++)
 		{
 			s = oplon ? oplbuf[i] << 2 : 0;	// dbopl is quiet next to a real OPL
 			l = r = s;
+			if (midi)
+			{
+				l += midibuf[i*2];
+				r += midibuf[i*2+1];
+			}
 
 			if (digiptr)
 			{
@@ -513,6 +527,7 @@ int GUS_Startup (void)
 {
 	disable ();
 	OPLEMU_Init (MIXRATE);
+	SYS_MidiRate (MIXRATE);
 	digistep = ((uint32_t)DIGIRATE << 16) / MIXRATE;
 	oplon = 1;
 	enable ();
@@ -1454,6 +1469,7 @@ static void Shutdown (void)
 	if (timerthread)
 		SDL_WaitThread (timerthread,NULL);
 	timerthread = NULL;
+	SYS_MidiShutdown ();
 	if (audiodev)
 		SDL_CloseAudioDevice (audiodev);
 	audiodev = 0;

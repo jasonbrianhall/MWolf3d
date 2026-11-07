@@ -90,6 +90,8 @@ char	configname[13]="CONFIG.";
 ====================
 */
 
+int		mididev;		// Linux: 0 an OPL3 in software, 1 FluidSynth, 2 the system's MIDI
+
 static int CfgRead (int file)
 {
 	short	value = 0;
@@ -211,7 +213,13 @@ static void ShowHelp (void)
 "\n"
 "Settings (saved to the CONFIG file when you quit):\n"
 "  -sfx off|pc|adlib        sound effects\n"
-"  -music off|adlib         music\n"
+"  -music off|adlib|midi    music (midi: General MIDI, from MUSIC/ (wolfmidi's\n"
+"                           songs) or NAME.MID; a song without one: AdLib)\n"
+"  -mididev opl|fluidsynth|alsa\n"
+"                           what plays the MIDI: an OPL3 in software (the default),\n"
+"                           FluidSynth (-soundfont FILE.sf2), or the system's MIDI\n"
+"                           (the ALSA sequencer: alsa, alsa:CLIENT:PORT, or a\n"
+"                           device like /dev/midi1); else SETUP's choice\n"
 "  -digi off|sb             digitized sound\n"
 "  -mouse on|off            -sensitivity 0-20\n"
 "  -viewsize 4-20           size of the 3D view (20: no border)\n"
@@ -250,7 +258,9 @@ static void ShowHelp (void)
 "\n"
 "Settings (saved to the CONFIG file when you quit):\n"
 "  -sfx off|pc|adlib        sound effects\n"
-"  -music off|adlib         music\n"
+"  -music off|adlib|midi    music (midi: General MIDI on an MPU-401, from\n"
+"                           MUSIC\\ (wolfmidi's songs) or NAME.MID; a song\n"
+"                           without one: AdLib)\n"
 "  -digi off|sb|ss          digitized sound (Sound Blaster, Sound Source)\n"
 "  -mouse on|off            -joystick off|1|2\n"
 "  -sensitivity 0-20        mouse sensitivity (10-20: faster than the original)\n"
@@ -265,6 +275,8 @@ static void ShowHelp (void)
 "  noal nosb nopro noss     don't use AdLib / Sound Blaster / SB Pro mixer /\n"
 "                           Sound Source\n"
 "  nogus                    don't use the Gravis UltraSound (ULTRASND=)\n"
+"  -mpu 330                 the MPU-401's port (else BLASTER's P, else 330)\n"
+"  nompu                    don't use the MPU-401\n"
 "  sst ss1 ss2 ss3          Sound Source: Tandy / LPT1-3\n"
 "  nomouse nojoys           don't use the mouse / joysticks\n"
 "  Sound Blaster settings come from BLASTER= (e.g. A220 I5 D1)\n"
@@ -319,6 +331,8 @@ static void CommandLineConfig (SDMode *sd, SMMode *sm, SDSMode *sds)
 		*sm = smm_Off;
 	else if (ArgIs (v,"adlib") && (AdLibPresent || SoundBlasterPresent))
 		*sm = smm_AdLib;
+	else if ((ArgIs (v,"midi") || ArgIs (v,"mpu") || ArgIs (v,"gm")) && MIDIPresent)
+		*sm = smm_MIDI;
 
 	v = ArgValue ("digi");
 	if (ArgIs (v,"off"))
@@ -367,6 +381,7 @@ void ReadConfig(void)
 	SDMode          sd;
 	SMMode          sm;
 	SDSMode         sds;
+	boolean			midimusic;
 
 
 	if ( !ArgPresent ("defaults") && (file = open(configname,O_BINARY | O_RDONLY)) != -1)
@@ -394,6 +409,8 @@ void ReadConfig(void)
 		viewsize = CfgRead(file);
 		mouseadjustment = CfgRead(file);
 		keystrafe = CfgRead(file) == 1;		// (after id's fields: 0 if it isn't there)
+		midimusic = CfgRead(file) == 1;		// General MIDI (id's field says AdLib)
+		mididev = CfgRead(file);			// Linux: what plays it
 
 		close(file);
 
@@ -413,8 +430,12 @@ void ReadConfig(void)
 
 		if (sd == sdm_AdLib && !AdLibPresent && !SoundBlasterPresent)
 			sd = sdm_PC;
+		if (sm == smm_AdLib && midimusic && MIDIPresent)
+			sm = smm_MIDI;		// (with no MPU-401 now: the AdLib)
 		if (sm == smm_AdLib && !AdLibPresent && !SoundBlasterPresent)
 			sm = smm_Off;		// id's code set sd twice here
+		if (mididev < 0 || mididev > 2)
+			mididev = 0;
 
 		if ((sds == sds_SoundBlaster && !SoundBlasterPresent) ||
 			(sds == sds_SoundSource && !SoundSourcePresent))
@@ -492,7 +513,7 @@ void WriteConfig(void)
 		write(file,Scores,sizeof(HighScore) * MaxScores);
 
 		CfgWrite(file,SoundMode);
-		CfgWrite(file,MusicMode);
+		CfgWrite(file,MusicMode == smm_MIDI ? smm_AdLib : MusicMode);	// what id's game knows
 		CfgWrite(file,DigiMode);
 
 		CfgWrite(file,mouseenabled);
@@ -509,6 +530,8 @@ void WriteConfig(void)
 		CfgWrite(file,viewsize);
 		CfgWrite(file,mouseadjustment);
 		CfgWrite(file,keystrafe);
+		CfgWrite(file,MusicMode == smm_MIDI);
+		CfgWrite(file,mididev);
 
 		close(file);
 	}

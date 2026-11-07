@@ -175,6 +175,21 @@ from the command line (``-sfx``, ``-music``, ``-digi``, ``-mouse``,
 ``-joystick``, ``-sensitivity``, ``-viewsize``) and are saved when you
 quit; ``-defaults`` ignores the ``CONFIG`` file.
 
+General MIDI music, as Bobby Prince wrote it (MIDI) rather than as the
+AdLib plays it: Music: General MIDI in the Sound menu (or SETUP, or
+``-music midi``), with an MPU-401 at 330h (or the port in ``BLASTER``'s
+``P``, or ``-mpu 300``; ``nompu`` to leave it alone). It's driven in UART
+mode, like a Sound Canvas, an SB16's MPU-401, a Roland MT-32 (after
+MTGM.MID) or DOSBox's ``mpu401=intelligent``. The songs are standard MIDI
+files: unzip `wolfmidi <https://github.com/ericvids/wolfmidi/releases>`_'s
+``MUSIC`` directory (the game's own songs converted to General MIDI, made for
+`wolfdosmpu <https://github.com/ericvids/wolfdosmpu>`_) next to the game, or
+put your own in it: ``MUSIC\CORNER``, ``MUSIC\CORNER.MID`` or
+``CORNER.MID`` for the song the AdLib knows as CORNER (any type 0 or 1 file,
+any tempo; ``loopStart`` / ``loopEnd`` markers loop part of it). A song
+without a file is played on the AdLib, and ``WOLFLOG.TXT`` says which.
+CONFIG keeps "AdLib" in id's field, so the original game still reads it.
+
 The Gravis UltraSound works too (``ULTRASND=`` as set by its install;
 ``nogus`` to ignore it): it has no AdLib chip, so the music and AdLib
 sound effects go through an OPL2 in software (DOSBox's dbopl) and are
@@ -226,6 +241,24 @@ pixels), ``-nosound``; ``./wolf3d --help`` lists the rest. A click in the
 window takes the mouse for turning; F12 (or Shift+Esc) lets it go, and
 so does switching to another window. CONFIG and the saved games are the DOS version's formats for
 the settings, but saved games only load in the build that made them.
+
+General MIDI music works here too (Music: General MIDI; the songs as for
+DOS, in ``MUSIC`` or ``music``): the game drives its MPU-401 as on DOS
+and ``sys_midi.c`` answers at 330h, giving the MIDI to one of
+
+- an OPL3 in software playing General MIDI (zenamp's instruments): the
+  "classic MIDI" sound of a Sound Blaster 16's FM. Built in, and the default
+- FluidSynth with a SoundFont (``-soundfont FILE.sf2``, else FluidSynth's
+  default, e.g. Debian / Ubuntu's ``fluid-soundfont-gm``). libfluidsynth is
+  opened when it's wanted: it isn't needed to build or run the game
+- the system's MIDI: the ALSA sequencer (a hardware synth, FluidSynth or
+  TiMidity running as a server, Munt...): the first port that makes sound,
+  or ``-mididev alsa:128:0`` / ``alsa:NAME`` for another; or a raw MIDI
+  device, ``-mididev /dev/midi1``
+
+SETUP's Sound screen ("General MIDI on") picks one and keeps it in CONFIG;
+``-mididev opl|fluidsynth|alsa`` does for one run. If it can't be opened,
+the OPL3 plays it (and the terminal says why).
 
 Network games go over UDP port 27135 to the local network (``-port N``
 for another). For a game somewhere else, ``-connect host[:port]``; for

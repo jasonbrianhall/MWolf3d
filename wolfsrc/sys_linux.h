@@ -226,6 +226,14 @@ int		SYS_TcpGet (void *buf, int max, unsigned char *from);
 void	SYS_TcpMyAddr (unsigned char *addr);
 uint32_t	SYS_Millis (void);		// a millisecond clock (the ping times)
 
+// sys_midi.c: the MPU-401 at 330h, and what plays its MIDI
+unsigned char SYS_MpuIn (int port);
+void	SYS_MpuOut (int port, unsigned char v);
+void	SYS_MidiOpen (void);		// id_midi.c, before a song: -mididev or CONFIG's
+void	SYS_MidiShutdown (void);
+void	SYS_MidiRate (int rate);
+int		SYS_MidiRender (int32_t *buf, int frames);	// stereo; 0: nothing to mix
+
 #ifndef SYS_LINUX_IMPL
 #define long int
 #endif
