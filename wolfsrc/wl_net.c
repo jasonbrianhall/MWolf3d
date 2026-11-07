@@ -3894,6 +3894,33 @@ void NetDrawChat (void)
 	fontnumber = oldfont;
 }
 
+//
+// NetNotice: a line at the top of the 3D view for a few seconds, in a
+// single player game too (what the music is playing on, for one)
+//
+void NetNotice (char *text)
+{
+	AddChatLine (text,15);
+}
+
+void NetDrawNotices (void)
+{
+	int		i,y,oldfont;
+
+	chatclock += tics;
+	CA_CacheGrChunk (STARTFONT);
+	oldfont = fontnumber;
+	fontnumber = 0;
+	y = 2;
+	for (i=0;i<NUMLINES;i++)
+		if (chatlines[i][0] && chattime[i] > chatclock)
+		{
+			DrawText (4,y,chatlines[i],chatcolor[i]);
+			y += 10;
+		}
+	fontnumber = oldfont;
+}
+
 boolean NetChatting (void)
 {
 	return chatting;

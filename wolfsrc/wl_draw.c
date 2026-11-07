@@ -1611,6 +1611,8 @@ void	ThreeDRefresh (void)
 		AM_Draw ();
 	if (netgame)
 		NetDrawChat ();		// co-op messages
+	else
+		NetDrawNotices ();	// (what the music plays on)
 
 //
 // show screen and time last cycle

@@ -490,6 +490,9 @@ void ReadConfig(void)
 	SD_SetSoundMode (sd);
 	SD_SetDigiDevice (sds);
 
+	GameLog ("Music: %s%s",MusicMode == smm_MIDI ? "General MIDI" : MusicMode == smm_AdLib ? "AdLib" : "off",
+		MIDIPresent ? "" : " (no MPU-401: no General MIDI)");
+
 }
 
 
