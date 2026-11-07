@@ -53,6 +53,9 @@ jobs:
             cp PLAYERS.WL6 $dir/PLAYERS.$ext
             cp RESPAWN.WAD $dir/RESPAWN.WAD
             cp FREEDOOM.TXT $dir/FREEDOOM.TXT
+            # General MIDI music (wolfmidi's songs)
+            cp -r MUSIC $dir/MUSIC
+            cp WOLFMIDI.TXT $dir/WOLFMIDI.TXT
             ls -la $dir
           done
 
@@ -96,6 +99,12 @@ jobs:
                      Gravis UltraSound: ULTRASND= as its install sets it
                      (music in software: wants a fast 486 or a Pentium);
                      nogus to ignore it.
+          MIDI:      Music: General MIDI (Sound menu, SETUP, -music midi)
+                     plays MUSIC\ (the songs as MIDI files, WOLFMIDI.TXT)
+                     on an MPU-401 at 330h (or BLASTER's P, or -mpu 300):
+                     a Sound Canvas, an SB16's MPU-401, DOSBox's (its
+                     [midi] mpu401=intelligent). WOLFLOG.TXT says what
+                     each song played on.
           Options:   WOLF3D /? lists them. Settings can be changed without
                      the menus, e.g. -music off -sfx pc -digi off, and are
                      saved when you quit; -defaults ignores the CONFIG file.
@@ -206,6 +215,8 @@ jobs:
             case $v in wl6apo) ext=WL6 ;; *) ext=$(echo $v | tr a-z A-Z) ;; esac
             cp ../msdos/PLAYERS.WL6 $dir/PLAYERS.$ext
             cp ../msdos/RESPAWN.WAD ../msdos/FREEDOOM.TXT $dir/
+            cp -r ../msdos/MUSIC $dir/MUSIC
+            cp ../msdos/WOLFMIDI.TXT $dir/
             rm -f $exe
           done
 
@@ -230,6 +241,13 @@ jobs:
           Files: AUDIOHED.* AUDIOT.* GAMEMAPS.* MAPHEAD.* VGADICT.*
           VGAGRAPH.* VGAHEAD.* VSWAP.* (upper or lower case).
 
+          MIDI:      Music: General MIDI (SETUP, the Sound menu, or
+                     -music midi) plays MUSIC/ (the songs as MIDI files,
+                     WOLFMIDI.TXT). SETUP's "General MIDI on" (or -mididev
+                     opl|fluidsynth|alsa) picks the synth: an OPL3 in
+                     software (built in), FluidSynth (libfluidsynth and a
+                     SoundFont, -soundfont FILE.sf2), or an ALSA sequencer
+                     port. The terminal says what each song played on.
           Options:   ./wolf3d --help. -fullscreen (or Alt+Enter),
                      -widescreen, -smooth, -nosound, -data DIR.
           Setup:     ./setup (in a terminal) sets sound, keys, mouse and

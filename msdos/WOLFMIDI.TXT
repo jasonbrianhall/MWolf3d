@@ -1,0 +1,11 @@
+MUSIC\ holds the game's songs as General MIDI files, from wolfmidi by
+ericvids: https://github.com/ericvids/wolfmidi (made from the AdLib
+songs in the game's own data with its converter, a modified dro2midi;
+wolfmidi is GPL v2). They're played when Music is General MIDI (the
+Sound menu, SETUP, or -music midi): on DOS through an MPU-401, on Linux
+through an OPL3 in software, FluidSynth or the system's MIDI.
+
+One file per song, named as the AdLib song is (CORNER, GETTHEM...), for
+Wolfenstein 3-D and Spear of Destiny both; _INFO is wolfmidi's index of
+them. Put another MIDI file in a song's place to hear that instead
+(MUSIC\NAME or MUSIC\NAME.MID). A song without a file plays on the AdLib.
