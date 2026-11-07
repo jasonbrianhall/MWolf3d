@@ -19,7 +19,7 @@
 
 #include "id_heads.h"
 #pragma	hdrstop
-#ifdef __linux__
+#ifdef SYS_SDL
 #undef Keyboard				// this is where they live (and then the
 #undef LastScan				// loops here read them through SYS_Poll
 #undef LastASCII			// too, below)
@@ -80,7 +80,7 @@ volatile	boolean		Keyboard[NumCodes];
 volatile	boolean		Paused;
 volatile	char		LastASCII;
 volatile	ScanCode	LastScan;
-#ifdef __linux__
+#ifdef SYS_SDL
 #define Keyboard	((volatile boolean *)SYS_Keyboard())
 #define LastScan	(*SYS_LastScan())
 #define LastASCII	(*SYS_LastASCII())
@@ -595,7 +595,7 @@ IN_Startup(void)
 		return;
 
 	checkjoys = true;
-#ifdef __linux__
+#ifdef SYS_SDL
 	checkjoys = false;
 #endif
 	checkmouse = true;

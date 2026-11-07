@@ -169,7 +169,7 @@ static boolean VL_WantWidescreen (void)
 
 void	VL_SetVGAPlaneMode (void)
 {
-#ifdef __linux__
+#ifdef SYS_SDL
 	// always the pages in memory, shown by SDL: 320 wide (4:3) or wider
 	if (!vlinear)
 	{
@@ -407,7 +407,7 @@ void VL_WaitVBL (int vbls)
 	if (vlinear)
 	{
 		VL_PresentDirty ();
-#ifdef __linux__
+#ifdef SYS_SDL
 		SYS_WaitVBL (vbls);
 		return;
 #endif

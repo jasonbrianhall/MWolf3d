@@ -163,6 +163,7 @@ unsigned	_dos_getdiskfree (unsigned drive, struct diskfree_t *d);
 void	_dos_gettime (struct dostime_t *t);
 void	_dos_getdate (struct dosdate_t *d);
 unsigned	_dos_write (int handle, const void *buf, unsigned len, unsigned *written);
+#define filelength	SYS_filelength
 int		filelength (int handle);
 int		kbhit (void);
 int		getch (void);
@@ -175,6 +176,17 @@ FILE	*SYS_Fopen (const char *name, const char *mode);
 #define open	SYS_Open
 #define fopen	SYS_Fopen
 
+// (Windows's own functions with the game's names: the game's are renamed)
+#ifdef _WIN32
+#define SetTextColor	W_SetTextColor
+#endif
+
+// (Windows's C library has some of these, a little different)
+#define itoa		SYS_itoa
+#define ltoa		SYS_ltoa
+#define ultoa		SYS_ultoa
+#define strlwr		SYS_strlwr
+#define strupr		SYS_strupr
 char	*itoa (int value, char *string, int radix);
 char	*strlwr (char *s);
 char	*strupr (char *s);
@@ -196,7 +208,8 @@ volatile char		*SYS_LastASCII (void);
 void	SYS_Poll (void);
 void	SYS_WaitVBL (int vbls);
 void	SYS_Sleep (void);		// a moment, from loops that only wait
-void	SYS_ShowText (const unsigned char *screen, int rows);	// the B800h text screens at Quit
+void	SYS_ShowText (const unsigned char *screen, int rows);
+void	SYS_ErrorBox (const char *error);	// Quit with an error: Windows shows it in a window	// the B800h text screens at Quit
 
 // The network: UDP in place of IPX (wl_net.c)
 int		SYS_NetStartup (int port);

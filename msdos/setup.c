@@ -18,8 +18,14 @@
  * ipxsetup): the blue screens are drawn in the terminal (an 80x25 screen
  * in memory, as DOS had it, put on the terminal with ANSI codes), the
  * keys come from the terminal, and the game is wolf3d (or spear), looked
- * for next to this program, then in the current directory.
+ * for next to this program, then in the current directory. And for
+ * Windows (windows/Makefile): the same, in a console window, its keys
+ * read with their scan codes.
  */
+
+#if defined(__linux__) || defined(_WIN32)
+#define HOSTED		// a terminal (Linux) or a console window (Windows), not DOS's screen
+#endif
 
 #include <stdio.h>
 #include <time.h>
@@ -29,15 +35,23 @@
 #include <stddef.h>
 #include <ctype.h>
 #include <unistd.h>
-#ifdef __linux__
+#ifdef HOSTED
 #include <strings.h>
-#include <termios.h>
 #include <errno.h>
 #include <signal.h>
 #include <dirent.h>
 #include <limits.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <process.h>
+#else
+#include <termios.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
+#endif
+#ifndef NAME_MAX
+#define NAME_MAX	255
+#endif
 #define stricmp		strcasecmp
 #define strnicmp	strncasecmp
 static FILE *CaseFopen (const char *name, const char *mode);
@@ -99,7 +113,7 @@ static const highscore_t defscores[MAXSCORES] =
 	{"Jay Wilbur",10000,1,0},
 };
 
-#ifdef __linux__
+#ifdef HOSTED
 /*
  * The data files can be in upper or lower case: a name that isn't there
  * as written is looked for whatever its case (in the current directory)
@@ -173,7 +187,7 @@ static void FindGame (void)
 		i = 0;
 	strcpy (dataext,games[i].ext);
 	strcpy (gameexe,games[i].exe);
-#ifdef __linux__
+#ifdef HOSTED
 	{
 		// wolf3d / spear: next to this program, or here
 		char	dir[PATH_MAX],*slash;
@@ -181,6 +195,19 @@ static void FindGame (void)
 
 		for (n=0;gameexe[n];n++)
 			gameexe[n] = tolower (gameexe[n]);
+#ifdef _WIN32
+		n = GetModuleFileNameA (NULL,dir,sizeof(dir)-1);
+		if (n > 0)
+		{
+			dir[n] = 0;
+			slash = strrchr (dir,'\\');
+			if (slash)
+				*slash = 0;
+			snprintf (gamepath,sizeof(gamepath),"%s\\%s",dir,gameexe);
+		}
+		if (n <= 0 || access (gamepath,0))
+			snprintf (gamepath,sizeof(gamepath),"%s",gameexe);
+#else
 		gameexe[strlen (gameexe)-4] = 0;		// no .exe
 		n = readlink ("/proc/self/exe",dir,sizeof(dir)-1);
 		if (n > 0)
@@ -193,6 +220,7 @@ static void FindGame (void)
 		}
 		if (n <= 0 || access (gamepath,X_OK))
 			snprintf (gamepath,sizeof(gamepath),"./%s",gameexe);
+#endif
 	}
 #endif
 	sprintf (cfgname,"CONFIG.%s",dataext);
@@ -463,14 +491,20 @@ static void SaveNet (void)
 #define YELLOW		0x1e
 #define BOX			0x1b			// cyan on blue
 
-#ifdef __linux__
+#ifdef HOSTED
 /*
  * The terminal: the screen is kept as DOS kept it (character, attribute)
  * and what changed is drawn before every wait for a key
  */
 static uint16_t	screen[25*80],shown[25*80];
 static int		termon,cursoron;
+#ifdef _WIN32
+static HANDLE	conin,conout;
+static DWORD	oldinmode,oldoutmode;
+static UINT		oldcp;
+#else
 static struct termios oldterm;
+#endif
 
 static void Poke (int x, int y, int ch, int attr)
 {
@@ -503,9 +537,16 @@ static void TermOff (void)
 	termon = 0;
 	printf ("\033[0m\033[2J\033[H\033[?25h\033[?1049l");
 	fflush (stdout);
+#ifdef _WIN32
+	SetConsoleMode (conin,oldinmode);
+	SetConsoleMode (conout,oldoutmode);
+	SetConsoleOutputCP (oldcp);
+#else
 	tcsetattr (0,TCSANOW,&oldterm);
+#endif
 }
 
+#ifndef _WIN32
 static void TermSignal (int sig)
 {
 	TermOff ();
@@ -517,7 +558,34 @@ static void Winch (int sig)
 {
 	// nothing: the wait for a key ends, and Refresh sees the new size
 }
+#endif
 
+#ifdef _WIN32
+// the console window: its own colors and keys, through the same escape
+// sequences as a terminal's (Windows 10 on)
+static void TermOn (void)
+{
+	if (termon)
+		return;
+	conin = GetStdHandle (STD_INPUT_HANDLE);
+	conout = GetStdHandle (STD_OUTPUT_HANDLE);
+	if (!GetConsoleMode (conin,&oldinmode) || !GetConsoleMode (conout,&oldoutmode))
+	{
+		fprintf (stderr,"setup needs a console window\n");
+		exit (1);
+	}
+	oldcp = GetConsoleOutputCP ();
+	SetConsoleOutputCP (CP_UTF8);
+	SetConsoleMode (conout,oldoutmode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+	SetConsoleMode (conin,ENABLE_WINDOW_INPUT);		// keys one by one, no Ctrl+C
+	SetConsoleTitleA ("Setup");
+	setvbuf (stdout,NULL,_IOFBF,1<<16);
+	termon = 1;
+	atexit (TermOff);
+	printf ("\033[?1049h\033[?25l\033[2J");
+	memset (shown,0xff,sizeof(shown));		// all of it, the first time
+}
+#else
 static void TermOn (void)
 {
 	struct termios t;
@@ -545,6 +613,7 @@ static void TermOn (void)
 	printf ("\033[?1049h\033[?25l\033[2J");
 	memset (shown,0xff,sizeof(shown));		// all of it, the first time
 }
+#endif
 
 /*
  * The 80x25 screen goes in the middle of a bigger terminal; every row is
@@ -555,8 +624,18 @@ static void Refresh (void)
 {
 	static const int ansi[8] = {0,4,2,6,1,5,3,7};
 	static int	oldcols,oldrows;
-	struct winsize ws;
 	int		i,ch,a,last = -1,at = -1,cols = 80,rows = 25,ox,oy;
+#ifdef _WIN32
+	CONSOLE_SCREEN_BUFFER_INFO info;
+
+	TermOn ();
+	if (GetConsoleScreenBufferInfo (conout,&info))
+	{
+		cols = info.srWindow.Right - info.srWindow.Left + 1;
+		rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+	}
+#else
+	struct winsize ws;
 
 	TermOn ();
 	if (!ioctl (1,TIOCGWINSZ,&ws) && ws.ws_col && ws.ws_row)
@@ -564,6 +643,7 @@ static void Refresh (void)
 		cols = ws.ws_col;
 		rows = ws.ws_row;
 	}
+#endif
 	if (cols != oldcols || rows != oldrows)
 	{
 		printf ("\033[0m\033[2J");
@@ -666,7 +746,7 @@ static void Box (int x, int y, int w, int h, int attr, const char *title)
 
 static void Cursor (int on)
 {
-#ifdef __linux__
+#ifdef HOSTED
 	cursoron = on;
 #else
 	__dpmi_regs r;
@@ -695,11 +775,83 @@ static void Background (const char *help)
 /* ------------------------------------------------------------------ */
 /* the keyboard (BIOS)                                                 */
 
-#ifdef __linux__
+#ifdef HOSTED
 /*
  * The terminal's keys, as the BIOS would give them: scan code << 8 | ASCII
  * (the grey keys E0h as their ASCII, as INT 16h AH=10h has them)
  */
+#ifdef _WIN32
+/*
+ * The console's keys come with the PC's scan codes, as the BIOS had them;
+ * the grey keys (arrows, Home...) with E0h for their ASCII, as INT 16h
+ * AH=10h gives them. Shift, Ctrl and Alt by themselves are keys here too
+ * (ReadGameKey).
+ */
+static int ConsoleKey (int wait, int modifiers)	// 0: none within wait ms (-1: forever)
+{
+	INPUT_RECORD	rec;
+	KEY_EVENT_RECORD *k;
+	DWORD			got;
+	int				scan,ascii;
+
+	for (;;)
+	{
+		Refresh ();
+		if (WaitForSingleObject (conin,wait < 0 ? INFINITE : (DWORD)wait) != WAIT_OBJECT_0)
+			return 0;
+		if (!ReadConsoleInputA (conin,&rec,1,&got) || !got)
+			exit (1);
+		if (rec.EventType != KEY_EVENT)
+			continue;						// (a resize: Refresh draws it again)
+		k = &rec.Event.KeyEvent;
+		if (!k->bKeyDown)
+			continue;
+		scan = k->wVirtualScanCode & 0xff;
+		ascii = (unsigned char)k->uChar.AsciiChar;
+		switch (k->wVirtualKeyCode)
+		{
+		case VK_SHIFT: case VK_CONTROL: case VK_MENU: case VK_CAPITAL:
+			if (!modifiers)
+				continue;
+			if (k->wVirtualKeyCode == VK_SHIFT)
+				return (k->wVirtualScanCode == 0x36 ? 0x36 : 0x2a) << 8;
+			return (k->wVirtualKeyCode == VK_CONTROL ? 0x1d : k->wVirtualKeyCode == VK_MENU ? 0x38 : 0x3a) << 8;
+		}
+		if (k->dwControlKeyState & ENHANCED_KEY)
+		{
+			if (scan == 0x1c)
+				return 0x1c0d;				// keypad Enter
+			if (scan == 0x35)
+				return 0x352f;				// keypad /
+			return (scan << 8) | 0xe0;
+		}
+		if ((k->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) && !(k->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)))
+			ascii = 0;						// Alt+key: the scan code alone
+		return (scan << 8) | ascii;
+	}
+}
+
+static int GetKey (void)
+{
+	return ConsoleKey (-1,0);
+}
+
+static int KeyWaiting (void)
+{
+	INPUT_RECORD	rec[16];
+	DWORD			got,i;
+
+	TermOn ();
+	if (!PeekConsoleInputA (conin,rec,16,&got))
+		return 0;
+	for (i=0;i<got;i++)
+		if (rec[i].EventType == KEY_EVENT && rec[i].Event.KeyEvent.bKeyDown)
+			return 1;
+	if (got)
+		ReadConsoleInputA (conin,rec,got,&got);	// (nothing but key ups and such)
+	return 0;
+}
+#else
 static int ReadByte (int wait)		// -1: nothing within wait ms (-1: forever)
 {
 	fd_set	fds;
@@ -832,6 +984,7 @@ static int KeyWaiting (void)
 	FD_SET (0,&fds);
 	return select (1,&fds,NULL,NULL,&tv) > 0;
 }
+#endif
 #else
 static int GetKey (void)			// scan<<8 | ascii
 {
@@ -884,7 +1037,18 @@ static int Scan (int key)
  * keyboard handler sees.  Shift, Ctrl and Alt make no keystroke for the
  * BIOS, so they're read from its shift flags.
  */
-#ifdef __linux__
+#if defined(HOSTED) && defined(_WIN32)
+#define GAMEKEYPROMPT	"Press a key (Esc cancels)"
+
+static int ReadGameKey (void)
+{
+	int key = ConsoleKey (-1,1);
+
+	if ((key >> 8) == K_ESC)
+		return -1;
+	return key >> 8;
+}
+#elif defined(HOSTED)
 /*
  * A terminal says nothing when Shift, Ctrl or Alt alone is pressed: those
  * are F1-F4 here (the game's F keys aren't for moving and firing anyway)
@@ -1211,10 +1375,14 @@ static int Form (const char *title, field_t *fields, int count, int *cursor,
 
 static const char *sfxnames[] = {"Off","PC Speaker","AdLib / SB / UltraSound"};
 static const char *musicnames[] = {"Off","AdLib / SB / UltraSound","General MIDI"};
-#ifdef __linux__
+#ifdef HOSTED
+#ifdef _WIN32
+static const char *midinames[] = {"OPL3 synth (built in)","FluidSynth","Windows MIDI"};
+#else
 static const char *midinames[] = {"OPL3 synth (built in)","FluidSynth","System MIDI (ALSA)"};
 #endif
-#ifdef __linux__
+#endif
+#ifdef HOSTED
 static const char *diginames[] = {"Off","Off (PC Speaker)","Off (Sound Source)","On"};
 #else
 static const char *diginames[] = {"Off","PC Speaker","Sound Source","Sound Blaster / UltraSound"};
@@ -1238,12 +1406,12 @@ static void SoundScreen (void)
 		{F_CHOICE,"Sound effects",&cfg.sd,0,2,sfxnames},
 		{F_CHOICE,"Music",&music,0,2,musicnames},
 		{F_CHOICE,"Digitized sound",&cfg.sds,0,3,diginames},
-#ifdef __linux__
+#ifdef HOSTED
 		{F_CHOICE,"General MIDI on",&cfg.mididev,0,2,midinames},
 #endif
 	};
 
-#ifdef __linux__
+#ifdef HOSTED
 	strcpy (note,"Through SDL: the AdLib is emulated");
 #else
 	if (getenv ("ULTRASND"))
@@ -1311,8 +1479,8 @@ static void MouseScreen (void)
 		jb[i] = cfg.buttonjoy[i]+1;
 	joy = cfg.joystickenabled ? cfg.joystickport+1 : 0;
 
-#ifdef __linux__
-	while (Form ("Mouse and joystick",f,13,&cursor,"No joysticks on Linux yet.") != -1)
+#ifdef HOSTED
+	while (Form ("Mouse and joystick",f,13,&cursor,"No joysticks here yet.") != -1)
 #else
 	while (Form ("Mouse and joystick",f,13,&cursor,NULL) != -1)
 #endif
@@ -1352,7 +1520,7 @@ static void DisplayScreen (void)
 	field_t	f[] =
 	{
 		{F_NUMBER,"View size (4-20)",&cfg.viewsize,4,20},
-#ifdef __linux__
+#ifdef HOSTED
 		{F_CHOICE,"Widescreen (16:9)",&widescreen,0,1,onoff},
 #else
 		{F_CHOICE,"Widescreen (16:9 VESA)",&widescreen,0,1,onoff},
@@ -1368,14 +1536,22 @@ static void RunGame (const char *const *args)
 	const char *argv[40];
 	int		n = 0,i;
 
-#ifdef __linux__
+#ifdef HOSTED
+#ifdef _WIN32
+	if (access (gamepath,0))
+#else
 	if (access (gamepath,X_OK))
+#endif
 	{
 		Background ("");
 		Box (12,10,56,6,0x4f,"Error");
 		Put (15,12,gameexe,0x4f);
 		Put (15+strlen (gameexe),12," isn't here or next to setup:",0x4f);
+#ifdef _WIN32
+		Put (15,13,"reinstall the game, or copy it here",0x4f);
+#else
 		Put (15,13,"build it (cd linux; make), or copy it here",0x4f);
+#endif
 		GetKey ();
 		return;
 	}
@@ -1411,9 +1587,28 @@ static void RunGame (const char *const *args)
 		}
 	}
 
-#ifdef __linux__
+#ifdef HOSTED
 	TermOff ();
+#ifdef _WIN32
+	{
+		// spawn quotes nothing: an argument with a space in it (a name)
+		// goes in quotes
+		static char	quoted[40][300];
+		intptr_t	r;
+
+		for (i=0;argv[i];i++)
+			if (strchr (argv[i],' ') || !argv[i][0])
+			{
+				snprintf (quoted[i],sizeof(quoted[i]),"\"%s\"",argv[i]);
+				argv[i] = quoted[i];
+			}
+		r = _spawnv (_P_WAIT,gamepath,(const char *const *)argv);
+		if (r != -1)
+			exit ((int)r);
+	}
+#else
 	execv (gamepath,(char *const *)argv);
+#endif
 	printf ("Couldn't run %s: %s\n",gamepath,strerror (errno));
 #else
 	Fill (0,0,80,25,' ',0x07);
@@ -1431,9 +1626,9 @@ static void RunGame (const char *const *args)
 }
 
 static const char *gamenames[] = {"Co-op","Deathmatch"};
-#ifdef __linux__
+#ifdef HOSTED
 static const char *netnames[] =
-	{"UDP (Linux players)","IPX: join DOSBox's IPXNET","IPX: be the IPXNET server",
+	{"UDP (Linux / Windows)","IPX: join DOSBox's IPXNET","IPX: be the IPXNET server",
 	 "TCP: connect to a server","TCP: be the server"};
 #endif
 
@@ -1459,7 +1654,7 @@ static void NetworkScreen (int standalone)
 		{F_SECONDS,"Items come back (deathmatch)",0,0,300,0,0,&net_itemsecs},
 		{F_NUMBER,"Bots (deathmatch)",0,0,14,0,0,&net_bots},
 		{F_CHOICE,"Bot skill",0,0,3,botskillnames,0,&net_botskill},
-#ifdef __linux__
+#ifdef HOSTED
 		{F_CHOICE,"Network",0,0,4,netnames,0,&net_ipx},
 		{F_STRING,"Connect to",0,0,40,0,0,0,net_connect},
 #endif
@@ -1471,7 +1666,7 @@ static void NetworkScreen (int standalone)
 
 	for (;;)
 	{
-#ifdef __linux__
+#ifdef HOSTED
 		act = Form ("Network game",f,17,&cursor,
 #else
 		act = Form ("Network game (IPX)",f,15,&cursor,
@@ -1527,7 +1722,7 @@ static void NetworkScreen (int standalone)
 			sprintf (fd,"%d",net_food);
 			args[n++] = "-foodrespawn"; args[n++] = fd;
 		}
-#ifdef __linux__
+#ifdef HOSTED
 		if (net_ipx == 4)
 			args[n++] = "-tcpserver";
 		else if (net_ipx == 3)
@@ -1571,7 +1766,7 @@ static int Confirm (const char *question)
 
 static void Restore (void)
 {
-#ifdef __linux__
+#ifdef HOSTED
 	TermOff ();
 #else
 	Fill (0,0,80,25,' ',0x07);
@@ -1590,7 +1785,7 @@ static void MainScreen (void)
 		{F_ACTION,"Mouse and joystick",0,0,0,0,3},
 		{F_ACTION,"Display",0,0,0,0,4},
 		{F_ACTION,"Chat macros",0,0,0,0,9},
-#ifdef __linux__
+#ifdef HOSTED
 		{F_ACTION,"Network game (co-op, deathmatch)",0,0,0,0,5},
 #else
 		{F_ACTION,"Network game (IPX co-op, deathmatch)",0,0,0,0,5},
@@ -1643,7 +1838,7 @@ int main (int argc, char **argv)
 	base = base ? base+1 : argv[0];
 	ipx = !strnicmp (base,"ipxsetup",8);
 
-#ifdef __linux__
+#ifdef HOSTED
 	// -data DIR: the game's files (and its settings) are there; the game
 	// runs there too
 	for (i=1;i<argc-1;i++)
@@ -1677,7 +1872,7 @@ int main (int argc, char **argv)
 			printf ("                      (-nodes N, -episode N, -level N, -skill 0-3,\n");
 			printf ("                       -nofriendlyfire, and any other game option)\n");
 			printf ("  ipxsetup -deathmatch [options]  joins (or starts) a deathmatch\n");
-#ifdef __linux__
+#ifdef HOSTED
 			printf ("  -data DIR           the game's files are in DIR (else the current one)\n");
 #endif
 			return 0;
